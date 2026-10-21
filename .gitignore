@@ -1,0 +1,8 @@
+# Local test outputs and temporary files
+*.cdoc
+*.txt
+bin/
+obj/
+*.user
+.vscode/
+.idea/
