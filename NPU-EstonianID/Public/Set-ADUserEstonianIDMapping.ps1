@@ -31,6 +31,8 @@ function Set-ADUserEstonianIDMapping {
 
     .EXAMPLE
     Set-ADUserEstonianIDMapping -Identity jjoeorg -EstonianIDPropertyName isikukood -WhatIf
+    .OUTPUTS
+    None. Problems are reported as errors and warnings.
     #>
     [CmdletBinding(DefaultParameterSetName = 'EstonianID', SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
     param(
@@ -55,7 +57,7 @@ function Set-ADUserEstonianIDMapping {
     )
 
     process {
-        Assert-ActiveDirectoryModule
+        _assertActiveDirectoryModule
 
         $resolvedID = $EstonianID
         $existingMappings = @()
@@ -106,7 +108,7 @@ function Set-ADUserEstonianIDMapping {
 
         # Avoid unnecessary writes if values are already the same
         if ($Replace) {
-            $isIdentical = _Test-IdenticalMappings -MappingsA $existingMappings -MappingsB $mappings
+            $isIdentical = _testIdenticalMappings -MappingsA $existingMappings -MappingsB $mappings
             if ($isIdentical -and -not $Force) {
                 Write-Verbose "altSecurityIdentities for user '$Identity' already match the resolved certificate mapping(s). No write required."
                 return

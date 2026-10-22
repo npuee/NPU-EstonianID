@@ -32,6 +32,8 @@ function Set-ADOUEstonianIDMapping {
 
     .EXAMPLE
     Set-ADOUEstonianIDMapping -DN "OU=Employees,DC=corp,DC=local" -EstonianIDPropertyName "isikukood" -Replace | Format-Table
+    .OUTPUTS
+    PSCustomObject per enabled user in the OU: Account, NationalID, MappingExists, CanBeReplaced, NeedsToBeReplaced, Replaced, LookupError, UpdateError.
     #>
     [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
     param(
@@ -55,7 +57,7 @@ function Set-ADOUEstonianIDMapping {
     )
 
     process {
-        Assert-ActiveDirectoryModule
+        _assertActiveDirectoryModule
 
         $users = Get-ADUser -Filter 'enabled -eq $true' -SearchBase $DN -Properties $EstonianIDPropertyName, altSecurityIdentities
         foreach ($user in $users) {
@@ -84,7 +86,7 @@ function Set-ADOUEstonianIDMapping {
 
                     if ($Replace) {
                         # In Replace mode, mappingExists is true ONLY if existing mappings match new mappings identically
-                        $mappingExists = _Test-IdenticalMappings -MappingsA $existingMappings -MappingsB $newMappings
+                        $mappingExists = _testIdenticalMappings -MappingsA $existingMappings -MappingsB $newMappings
                         $needsToBeReplaced = (-not $mappingExists)
                     }
                     else {

@@ -8,8 +8,23 @@ Write-Host "Running NPU-EstonianID Test Suite on PS Version $($PSVersionTable.PS
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 $modulePath = Resolve-Path (Join-Path -Path $PSScriptRoot -ChildPath '..\NPU-EstonianID\NPU-EstonianID.psd1')
-Write-Host "[1/11] Importing Module from: $modulePath"
+Write-Host "[1/13] Importing Module from: $modulePath"
 Import-Module $modulePath -Force
+
+# Points the module's LDAP directories at other servers; without arguments restores the real ones.
+# Tests use a closed local port so that lookups fail fast or come from the cache, without network access.
+$realLdap = & (Get-Module NPU-EstonianID) { @{ SK = $script:EstIDLdapURL; SKPort = $script:EstIDLdapPort; Zetes = $script:ThalesLdapURL; ZetesPort = $script:ThalesLdapPort } }
+function Set-TestLdapServer {
+    param(
+        [string]$SK = $realLdap.SK, [int]$SKPort = $realLdap.SKPort,
+        [string]$Zetes = $realLdap.Zetes, [int]$ZetesPort = $realLdap.ZetesPort
+    )
+    & (Get-Module NPU-EstonianID) {
+        param($skUrl, $skPort, $zetesUrl, $zetesPort)
+        $script:EstIDLdapURL = $skUrl; $script:EstIDLdapPort = $skPort
+        $script:ThalesLdapURL = $zetesUrl; $script:ThalesLdapPort = $zetesPort
+    } $SK $SKPort $Zetes $ZetesPort
+}
 
 # Verify exported commands
 $exported = Get-Command -Module NPU-EstonianID
@@ -22,7 +37,7 @@ if (-not ($exported.Name -contains 'Get-EstEIDCertificate')) {
 }
 
 # 2. Test Soft ActiveDirectory check
-Write-Host "`n[2/11] Testing Soft Active Directory dependency check..."
+Write-Host "`n[2/13] Testing Soft Active Directory dependency check..."
 try {
     Get-ADUserEstonianIDMapping -Identity "testuser" -ErrorAction Stop
     Write-Warning "ActiveDirectory module is present on this system."
@@ -37,7 +52,7 @@ catch {
 }
 
 # 3. Load Test Certificates
-Write-Host "`n[3/11] Loading Test Certificates (2018 SK and 2025 Zetes)..."
+Write-Host "`n[3/13] Loading Test Certificates (2018 SK and 2025 Zetes)..."
 $cert2018Path = Join-Path -Path $PSScriptRoot -ChildPath 'cert_esteid2018_test.cer'
 $cert2025Path = Join-Path -Path $PSScriptRoot -ChildPath 'cert_esteid2025_test.cer'
 
@@ -56,7 +71,7 @@ if ([string]::IsNullOrWhiteSpace($name2025)) {
 Write-Host " PASS: SimpleName correctly extracted for both card generations." -ForegroundColor Green
 
 # 4. Test Strong Name Mapping string generation
-Write-Host "`n[4/11] Testing Strong Name Mapping Generation (Get-IDUserMapping)..."
+Write-Host "`n[4/13] Testing Strong Name Mapping Generation (Get-IDUserMapping)..."
 $mapping2018 = Get-IDUserMapping -Certificate $cert2018
 $mapping2025 = Get-IDUserMapping -Certificate $cert2025
 Write-Host " 2018 Mapping: $mapping2018"
@@ -71,7 +86,7 @@ if (-not $mapping2025.StartsWith("X509:<I>") -or -not $mapping2025.Contains("<SR
 Write-Host " PASS: Strong name mapping strings generated successfully." -ForegroundColor Green
 
 # 5. Test CDOC 1.0 Encryption for 2025 Zetes Card
-Write-Host "`n[5/11] Testing CDOC Encryption with 2025 Zetes Card (Native PS & bcrypt.dll)..."
+Write-Host "`n[5/13] Testing CDOC Encryption with 2025 Zetes Card (Native PS & bcrypt.dll)..."
 $testPlaintext = "Hello Estonian ID! This is a confidential test encrypted with pure native PowerShell."
 $testFile = Join-Path -Path $env:TEMP -ChildPath "npu_test_doc.txt"
 [System.IO.File]::WriteAllText($testFile, $testPlaintext)
@@ -93,7 +108,7 @@ if ($encKey.Recipient -ne $name2025) {
 Write-Host " PASS: Recipient attribute is non-empty and matches '$name2025' perfectly!" -ForegroundColor Green
 
 # 6. Test Multi-Recipient Encryption (2018 + 2025 cards)
-Write-Host "`n[6/11] Testing Multi-Recipient Encryption (2018 + 2025 simultaneously)..."
+Write-Host "`n[6/13] Testing Multi-Recipient Encryption (2018 + 2025 simultaneously)..."
 $testCdocMulti = Join-Path -Path $env:TEMP -ChildPath "npu_test_multi.cdoc"
 if (Test-Path $testCdocMulti) { Remove-Item $testCdocMulti -Force }
 
@@ -109,7 +124,7 @@ Write-Host " Recipient 2: $($encKeys[1].Recipient)"
 Write-Host " PASS: Multi-recipient CDOC container generated with 2 keys." -ForegroundColor Green
 
 # 7. Test In-Memory String Encryption
-Write-Host "`n[7/11] Testing In-Memory String Encryption (-InputString)..."
+Write-Host "`n[7/13] Testing In-Memory String Encryption (-InputString)..."
 $testCdocString = Join-Path -Path $env:TEMP -ChildPath "npu_test_string.cdoc"
 if (Test-Path $testCdocString) { Remove-Item $testCdocString -Force }
 
@@ -155,7 +170,7 @@ finally {
 Write-Host " PASS: Piped lines encrypted as a single 'pipe.txt' inside 'pipe.cdoc'." -ForegroundColor Green
 
 # 8. Test Incomplete LDAP Directory Outage Handling
-Write-Host "`n[8/11] Testing Incomplete LDAP Outage Handling (Failure Isolation & Zero Caching)..."
+Write-Host "`n[8/13] Testing Incomplete LDAP Outage Handling (Failure Isolation & Zero Caching)..."
 $v2CacheDir = & (Get-Module NPU-EstonianID) { $script:CacheFolder }
 $fakeID = '00000000000'
 $fakeCacheFile = Join-Path -Path $v2CacheDir -ChildPath "$fakeID.json"
@@ -169,8 +184,7 @@ if (Test-Path -LiteralPath $tempCdocFail) {
 }
 
 try {
-    $global:ThalesLdapURL = '127.0.0.1'
-    $global:ThalesLdapPort = 1
+    Set-TestLdapServer -Zetes '127.0.0.1' -ZetesPort 1
 
     # 1. Assert Get-EstEIDCertificate throws with 'incomplete' and '127.0.0.1'
     $threwCert = $false
@@ -260,10 +274,7 @@ try {
     Write-Host " PASS: Incomplete LDAP outage handling verified." -ForegroundColor Green
 }
 finally {
-    Remove-Variable -Name 'ThalesLdapURL' -Scope Global -ErrorAction SilentlyContinue
-    Remove-Variable -Name 'ThalesLdapPort' -Scope Global -ErrorAction SilentlyContinue
-    Remove-Variable -Name 'EstIDLdapURL' -Scope Global -ErrorAction SilentlyContinue
-    Remove-Variable -Name 'EstIDLdapPort' -Scope Global -ErrorAction SilentlyContinue
+    Set-TestLdapServer
     if (Test-Path -LiteralPath $tempCdocFail) {
         Remove-Item -LiteralPath $tempCdocFail -Force -ErrorAction SilentlyContinue
     }
@@ -273,7 +284,7 @@ finally {
 }
 
 # 9. Decryption Round-Trip Test (End-to-End Key Unwrap + AES-GCM Decrypt)
-Write-Host "`n[9/11] Testing Full Decryption Round-Trip (ECDH + Key Unwrap + AES-GCM Decrypt)..."
+Write-Host "`n[9/13] Testing Full Decryption Round-Trip (ECDH + Key Unwrap + AES-GCM Decrypt)..."
 if ($PSVersionTable.PSVersion.Major -ge 7) {
     if (-not ([System.Management.Automation.PSTypeName]'KwUnwrap').Type) {
         Add-Type -TypeDefinition @"
@@ -344,7 +355,7 @@ else {
 }
 
 # 10. OU batch reports Set-ADUser failures (fake ActiveDirectory module, cached certificate, no network)
-Write-Host "`n[10/11] Testing Set-ADOUEstonianIDMapping failure reporting (mock Active Directory)..."
+Write-Host "`n[10/13] Testing Set-ADOUEstonianIDMapping failure reporting (mock Active Directory)..."
 if (Get-Module -ListAvailable -Name ActiveDirectory) {
     Write-Host " SKIP: real ActiveDirectory module is installed; not shadowing it with a mock" -ForegroundColor Yellow
 }
@@ -361,8 +372,7 @@ else {
             Timestamp   = [DateTime]::UtcNow.ToString('o')
             Base64Certs = @([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($cert2025Path)))
         } | ConvertTo-Json | Set-Content -LiteralPath $adCacheFile -Encoding utf8
-        $global:EstIDLdapURL = '127.0.0.1'; $global:EstIDLdapPort = 1
-        $global:ThalesLdapURL = '127.0.0.1'; $global:ThalesLdapPort = 1
+        Set-TestLdapServer -SK '127.0.0.1' -SKPort 1 -Zetes '127.0.0.1' -ZetesPort 1
 
         New-Module -Name ActiveDirectory -ScriptBlock {
             function Get-ADUser {
@@ -420,14 +430,12 @@ else {
         else {
             Remove-Item -LiteralPath $adCacheFile -ErrorAction SilentlyContinue
         }
-        'EstIDLdapURL', 'EstIDLdapPort', 'ThalesLdapURL', 'ThalesLdapPort' | ForEach-Object {
-            Remove-Variable -Name $_ -Scope Global -ErrorAction SilentlyContinue
-        }
+        Set-TestLdapServer
     }
 }
 
 # 11. Recipient certificate validation (cache contents, validity period, curve)
-Write-Host "`n[11/11] Testing recipient certificate validation..."
+Write-Host "`n[11/13] Testing recipient certificate validation..."
 $poisonId = '00000000003'
 $poisonFile = Join-Path -Path (& (Get-Module NPU-EstonianID) { $script:CacheFolder }) -ChildPath "$poisonId.json"
 try {
@@ -437,8 +445,7 @@ try {
         Timestamp   = [DateTime]::UtcNow.ToString('o')
         Base64Certs = @([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($cert2025Path)))
     } | ConvertTo-Json | Set-Content -LiteralPath $poisonFile -Encoding utf8
-    $global:EstIDLdapURL = '127.0.0.1'; $global:EstIDLdapPort = 1
-    $global:ThalesLdapURL = '127.0.0.1'; $global:ThalesLdapPort = 1
+    Set-TestLdapServer -SK '127.0.0.1' -SKPort 1 -Zetes '127.0.0.1' -ZetesPort 1
 
     $wv = $null
     $poisonCerts = @(Get-EstEIDCertificate -ID $poisonId -UseCache -ErrorAction SilentlyContinue -WarningAction SilentlyContinue -WarningVariable wv)
@@ -452,9 +459,7 @@ try {
 }
 finally {
     Remove-Item -LiteralPath $poisonFile -ErrorAction SilentlyContinue
-    'EstIDLdapURL', 'EstIDLdapPort', 'ThalesLdapURL', 'ThalesLdapPort' | ForEach-Object {
-        Remove-Variable -Name $_ -Scope Global -ErrorAction SilentlyContinue
-    }
+    Set-TestLdapServer
 }
 
 $sha384 = [System.Security.Cryptography.HashAlgorithmName]::SHA384
@@ -494,8 +499,7 @@ try {
         Timestamp   = [DateTime]::UtcNow.ToString('o')
         Base64Certs = @([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($cert2025Path)))
     } | ConvertTo-Json | Set-Content -LiteralPath $saveCacheFile -Encoding utf8
-    $global:EstIDLdapURL = '127.0.0.1'; $global:EstIDLdapPort = 1
-    $global:ThalesLdapURL = '127.0.0.1'; $global:ThalesLdapPort = 1
+    Set-TestLdapServer -SK '127.0.0.1' -SKPort 1 -Zetes '127.0.0.1' -ZetesPort 1
 
     $saved = @(Get-EstEIDCertificate -ID $saveId -UseCache -OutFolder $saveDir -ErrorAction Stop)
     $expectedFile = Join-Path -Path $saveDir -ChildPath "cert_${saveId}_$($cert2025.SerialNumber).cer"
@@ -516,9 +520,37 @@ finally {
         Remove-Item -LiteralPath $saveCacheFile -ErrorAction SilentlyContinue
     }
     Remove-Item -LiteralPath $saveDir -Recurse -Force -ErrorAction SilentlyContinue
-    'EstIDLdapURL', 'EstIDLdapPort', 'ThalesLdapURL', 'ThalesLdapPort' | ForEach-Object {
-        Remove-Variable -Name $_ -Scope Global -ErrorAction SilentlyContinue
+    Set-TestLdapServer
+}
+
+# 12. Help: every exported command documents itself for Get-Help
+Write-Host "`n[12/13] Testing help texts..."
+foreach ($name in (Get-Module NPU-EstonianID).ExportedFunctions.Keys) {
+    $help = Get-Help $name -Full
+    if (-not $help.Synopsis -or $help.Synopsis.Trim() -like "$name *" -or $help.Synopsis.Trim() -eq $name) { throw "$name has no written synopsis" }
+    if (-not (($help.description | ForEach-Object { $_.Text }) -join '').Trim()) { throw "$name has no description" }
+    if (@($help.examples.example | Where-Object { $_.code }).Count -lt 1) { throw "$name has no example" }
+    if (-not $help.returnValues.returnValue) { throw "$name has no .OUTPUTS section" }
+    foreach ($p in @($help.parameters.parameter | Where-Object { $_.name -notin 'WhatIf', 'Confirm' })) {
+        if (-not (($p.description | ForEach-Object { $_.Text }) -join '').Trim()) { throw "$name does not document -$($p.name)" }
     }
+}
+Write-Host " PASS: Every exported command has a synopsis, description, examples, outputs and documented parameters." -ForegroundColor Green
+
+# 13. PSScriptAnalyzer: no findings with the repository settings (default rules + PowerShell 5.1/7 compatibility)
+Write-Host "`n[13/13] Running PSScriptAnalyzer..."
+if (Get-Module -ListAvailable -Name PSScriptAnalyzer) {
+    $moduleFolder = Join-Path -Path $PSScriptRoot -ChildPath '..\NPU-EstonianID'
+    # PSScriptAnalyzer 1.25 fails on one file of the first multi-file run in a process; warm it up on a single file
+    $null = Invoke-ScriptAnalyzer -Path (Join-Path -Path $moduleFolder -ChildPath 'NPU-EstonianID.psm1') -ErrorAction SilentlyContinue
+    $analyzerErrors = $null
+    $findings = @(Invoke-ScriptAnalyzer -Path $moduleFolder -Recurse -Settings (Join-Path -Path $PSScriptRoot -ChildPath '..\PSScriptAnalyzerSettings.psd1') -ErrorAction SilentlyContinue -ErrorVariable analyzerErrors)
+    if (@($analyzerErrors).Count) { throw "PSScriptAnalyzer could not analyze: $(@($analyzerErrors | ForEach-Object { "$($_.TargetObject): $_" }) -join '; ')" }
+    if ($findings.Count) { throw "PSScriptAnalyzer findings:`n$(($findings | ForEach-Object { "$($_.ScriptName):$($_.Line) $($_.RuleName): $($_.Message)" }) -join "`n")" }
+    Write-Host " PASS: PSScriptAnalyzer: no findings (default rules, PowerShell 5.1 and 7 compatibility)." -ForegroundColor Green
+}
+else {
+    Write-Host " SKIP: PSScriptAnalyzer is not installed for this PowerShell version" -ForegroundColor Yellow
 }
 
 Write-Host "`n==========================================================" -ForegroundColor Green

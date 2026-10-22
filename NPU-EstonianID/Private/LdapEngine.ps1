@@ -2,6 +2,7 @@
 # NPU-EstonianID - Common LDAP & Cache Engine
 #
 
+# LDAP directories (module settings; the tests point them at a closed local port)
 $script:EstIDLdapURL = "esteid.ldap.sk.ee"
 $script:EstIDLdapPort = 636
 $script:EstIDLdapDN = "dc=ESTEID,c=EE"
@@ -19,7 +20,7 @@ $script:CacheTTLHours = 24
 $script:MemoryCache = @{}
 
 # Returns $null if the certificate is currently valid and issued to the personal code, otherwise the reason it is not.
-function _Get-EstEIDCertificateProblem {
+function _getCertificateProblem {
     param(
         [byte[]]$CertBytes,
         [string]$ID
@@ -41,7 +42,7 @@ function _Get-EstEIDCertificateProblem {
     return $null
 }
 
-function Get-CachedCertificates {
+function _getCachedCertificates {
     param([string]$ID)
 
     # 1. Check in-memory cache
@@ -72,12 +73,14 @@ function Get-CachedCertificates {
                 }
                 return , $rawList.ToArray()
             }
-        } catch { }
+        } catch {
+            Write-Verbose "Ignoring unreadable cache file '$cacheFile': $($_.Exception.Message)"
+        }
     }
     return $null
 }
 
-function Set-CachedCertificates {
+function _setCachedCertificates {
     param(
         [string]$ID,
         [byte[][]]$CertBytesList
@@ -108,11 +111,15 @@ function Set-CachedCertificates {
         }
         $json = $obj | ConvertTo-Json
         Set-Content -LiteralPath $cacheFile -Value $json -Encoding utf8
-    } catch { }
+    } catch {
+        Write-Verbose "Could not write the certificate cache for ID '$ID': $($_.Exception.Message)"
+    }
 }
 
-function Get-LdapCertificatesInternal {
+function _getLdapCertificates {
     [CmdletBinding()]
+    [OutputType([byte[][]])]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseOutputTypeCorrectly', '', Justification = '"return , $certArray" outputs the byte[][] as one object; the analyzer sees the Object[] wrapper.')]
     param(
         [Parameter(Mandatory = $true)]
         [string]$ID,
@@ -122,9 +129,9 @@ function Get-LdapCertificatesInternal {
     )
 
     if ($UseCache) {
-        $cached = Get-CachedCertificates -ID $ID
+        $cached = _getCachedCertificates -ID $ID
         if ($cached -and $cached.Count -gt 0) {
-            $problems = @($(foreach ($bytes in $cached) { _Get-EstEIDCertificateProblem -CertBytes $bytes -ID $ID }) | Where-Object { $_ })
+            $problems = @($(foreach ($bytes in $cached) { _getCertificateProblem -CertBytes $bytes -ID $ID }) | Where-Object { $_ })
             if ($problems.Count -eq 0) {
                 Write-Verbose "Retrieved certificate(s) for ID '$ID' from cache."
                 return $cached
@@ -139,9 +146,9 @@ function Get-LdapCertificatesInternal {
     $errors = [System.Collections.Generic.List[string]]::new()
 
     # 1. Search SK ID Solutions LDAP (esteid.ldap.sk.ee) - ESTEID2018
-    $skUrl  = if ($global:EstIDLdapURL)  { $global:EstIDLdapURL }  else { $script:EstIDLdapURL }
-    $skPort = if ($global:EstIDLdapPort) { $global:EstIDLdapPort } else { $script:EstIDLdapPort }
-    $skDN   = if ($global:EstIDLdapDN)   { $global:EstIDLdapDN }   else { $script:EstIDLdapDN }
+    $skUrl  = $script:EstIDLdapURL
+    $skPort = $script:EstIDLdapPort
+    $skDN   = $script:EstIDLdapDN
 
     $ldap = $null
     $ds   = $null
@@ -176,14 +183,14 @@ function Get-LdapCertificatesInternal {
         $errors.Add("${skUrl}: $($_.Exception.Message)")
     }
     finally {
-        if ($ds)   { try { $ds.Dispose() } catch { } }
-        if ($ldap) { try { $ldap.Dispose() } catch { } }
+        if ($ds)   { try { $ds.Dispose() } catch { Write-Verbose "Ignoring error while closing SK LDAP search: $($_.Exception.Message)" } }
+        if ($ldap) { try { $ldap.Dispose() } catch { Write-Verbose "Ignoring error while closing SK LDAP connection: $($_.Exception.Message)" } }
     }
 
     # 2. Search Thales / Zetes LDAP (ldap.eidpki.ee) - ESTEID2025
-    $thalesUrl  = if ($global:ThalesLdapURL)  { $global:ThalesLdapURL }  else { $script:ThalesLdapURL }
-    $thalesPort = if ($global:ThalesLdapPort) { $global:ThalesLdapPort } else { $script:ThalesLdapPort }
-    $thalesDN   = if ($global:ThalesLdapDN)   { $global:ThalesLdapDN }   else { $script:ThalesLdapDN }
+    $thalesUrl  = $script:ThalesLdapURL
+    $thalesPort = $script:ThalesLdapPort
+    $thalesDN   = $script:ThalesLdapDN
 
     $thalesLdap = $null
     $thalesDs   = $null
@@ -219,8 +226,8 @@ function Get-LdapCertificatesInternal {
         $errors.Add("${thalesUrl}: $($_.Exception.Message)")
     }
     finally {
-        if ($thalesDs)   { try { $thalesDs.Dispose() } catch { } }
-        if ($thalesLdap) { try { $thalesLdap.Dispose() } catch { } }
+        if ($thalesDs)   { try { $thalesDs.Dispose() } catch { Write-Verbose "Ignoring error while closing Zetes LDAP search: $($_.Exception.Message)" } }
+        if ($thalesLdap) { try { $thalesLdap.Dispose() } catch { Write-Verbose "Ignoring error while closing Zetes LDAP connection: $($_.Exception.Message)" } }
     }
 
     if ($errors.Count -gt 0) {
@@ -230,7 +237,7 @@ function Get-LdapCertificatesInternal {
 
     $validCerts = [System.Collections.Generic.List[byte[]]]::new()
     foreach ($bytes in $discoveredCerts) {
-        $problem = _Get-EstEIDCertificateProblem -CertBytes $bytes -ID $ID
+        $problem = _getCertificateProblem -CertBytes $bytes -ID $ID
         if ($problem) {
             Write-Verbose "Skipping LDAP certificate for ID '$ID': $problem"
         }
@@ -241,7 +248,7 @@ function Get-LdapCertificatesInternal {
 
     $certArray = $validCerts.ToArray()
     if ($UseCache -and $certArray.Count -gt 0) {
-        Set-CachedCertificates -ID $ID -CertBytesList $certArray
+        _setCachedCertificates -ID $ID -CertBytesList $certArray
     }
 
     return , $certArray

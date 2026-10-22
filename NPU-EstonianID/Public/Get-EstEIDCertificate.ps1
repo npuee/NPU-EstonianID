@@ -35,6 +35,8 @@ function Get-EstEIDCertificate {
     .EXAMPLE
     # Save the certificates to files
     Get-EstEIDCertificate -ID '38001085718' -OutFolder C:\Certs
+    .OUTPUTS
+    System.Security.Cryptography.X509Certificates.X509Certificate2 by default; System.Byte[] with -Raw; System.IO.FileInfo (the saved .cer files) with -OutFolder.
     #>
     [CmdletBinding(DefaultParameterSetName = 'Object')]
     param(
@@ -56,7 +58,7 @@ function Get-EstEIDCertificate {
     process {
         $certByteList = $null
         try {
-            $certByteList = Get-LdapCertificatesInternal -ID $ID -UseCache:$UseCache
+            $certByteList = _getLdapCertificates -ID $ID -UseCache:$UseCache
         }
         catch {
             Write-Error -Message $_.Exception.Message `

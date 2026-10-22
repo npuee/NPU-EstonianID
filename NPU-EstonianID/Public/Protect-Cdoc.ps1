@@ -31,6 +31,8 @@ function Protect-Cdoc {
         One or more X509Certificate2 objects or certificate byte arrays representing recipient public certificates.
     .PARAMETER PassThru
         Returns the created FileInfo object for the generated .cdoc container.
+    .PARAMETER NoCache
+        Always look up -ID certificates in LDAP instead of using the 24-hour certificate cache.
     .EXAMPLE
         Protect-Cdoc -InputFile C:\Docs\Contract.pdf -ID 38001085718
         Encrypts Contract.pdf for personal code 38001085718, creating Contract.pdf.cdoc.
@@ -44,6 +46,8 @@ function Protect-Cdoc {
         $cert = Get-EstEIDCertificate -PersonalCode 60001019906
         Protect-Cdoc -InputFile secret.docx -Certificate $cert
         Encrypts using an in-memory certificate object directly.
+    .OUTPUTS
+        None by default; System.IO.FileInfo of the created .cdoc container with -PassThru.
     #>
     # InputFile and InputString deliberately share one parameter set (like Set-Content's -Path/-Value):
     # with two sets the binder commits to the default set before pipeline input arrives, so piped
@@ -111,7 +115,7 @@ function Protect-Cdoc {
             throw "Input file not found: '$resolvedInputPath'"
         }
         $entryName = [System.IO.Path]::GetFileName($resolvedInputPath)
-        _Protect-CdocItem -PlaintextBytes ([System.IO.File]::ReadAllBytes($resolvedInputPath)) -EntryName $entryName `
+        _protectCdocItem -PlaintextBytes ([System.IO.File]::ReadAllBytes($resolvedInputPath)) -EntryName $entryName `
             -DefaultOutName "$entryName.cdoc" -DefaultOutPath "$resolvedInputPath.cdoc"
     }
 
@@ -125,14 +129,14 @@ function Protect-Cdoc {
         $entryName = if ([string]::IsNullOrWhiteSpace($FileName)) { "pipe.txt" } else { [System.IO.Path]::GetFileName($FileName) }
         $outName = "$([System.IO.Path]::GetFileNameWithoutExtension($entryName)).cdoc"
         $plaintext = $stringParts -join [System.Environment]::NewLine
-        _Protect-CdocItem -PlaintextBytes ([System.Text.Encoding]::UTF8.GetBytes($plaintext)) -EntryName $entryName `
+        _protectCdocItem -PlaintextBytes ([System.Text.Encoding]::UTF8.GetBytes($plaintext)) -EntryName $entryName `
             -DefaultOutName $outName -DefaultOutPath (Join-Path -Path (Get-Location).Path -ChildPath $outName)
     }
 }
 
 # Encrypts one document for the recipients bound to the calling Protect-Cdoc invocation
 # ($Out, $ID, $Certificate, $NoCache, $PassThru and $PSCmdlet are resolved from the caller's scope).
-function _Protect-CdocItem {
+function _protectCdocItem {
     param(
         [byte[]]$PlaintextBytes,
         [string]$EntryName,
@@ -261,7 +265,7 @@ function _Protect-CdocItem {
         $encryptedPayload = [CdocCryptoEngine]::EncryptAes256Gcm($transportKey, $iv, $plaintextBytes)
 
         # 6. Build CDOC 1.0 XML Document
-        $xmlDoc = New-Cdoc1XmlContainer -EncryptedPayload $encryptedPayload `
+        $xmlDoc = _newCdoc1XmlContainer -EncryptedPayload $encryptedPayload `
             -FileName $entryName `
             -FileSize $plaintextBytes.Length `
             -Recipients $recipientList `

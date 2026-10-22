@@ -2,7 +2,7 @@
 # Active Directory Soft/Lazy Requirement and Mapping Helpers
 #
 
-function Assert-ActiveDirectoryModule {
+function _assertActiveDirectoryModule {
     if (-not (Get-Module -Name ActiveDirectory)) {
         try {
             Import-Module -Name ActiveDirectory -ErrorAction Stop
@@ -13,7 +13,7 @@ function Assert-ActiveDirectoryModule {
     }
 }
 
-function _Test-IdenticalMappings {
+function _testIdenticalMappings {
     param(
         [string[]]$MappingsA,
         [string[]]$MappingsB
@@ -35,7 +35,7 @@ function _Test-IdenticalMappings {
     return $true
 }
 
-function _Format-X509StrongNameMapping {
+function _formatStrongNameMapping {
     param(
         [Parameter(Mandatory = $true)]
         [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate

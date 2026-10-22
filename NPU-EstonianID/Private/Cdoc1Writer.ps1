@@ -2,7 +2,7 @@
 # NPU-EstonianID - CDOC 1.0 XML Builder (PS 5.1 & PS 7+)
 #
 
-function New-Cdoc1XmlContainer {
+function _newCdoc1XmlContainer {
     <#
     .SYNOPSIS
         Builds the CDOC 1.0 (ENCDOC-XML|1.1) XML structure.

@@ -158,6 +158,25 @@ Emitted output includes `Account`, `NationalID`, `MappingExists`, `CanBeReplaced
 
 ---
 
+## Development
+
+Run the test suite (no network or Active Directory needed; works in Windows PowerShell 5.1 and PowerShell 7):
+
+```powershell
+.\Tests\Run-Tests.ps1
+```
+
+When PSScriptAnalyzer is installed, the suite also requires a clean analysis with the repository settings
+(default rules plus PowerShell 5.1/7 compatibility). To run it on its own:
+
+```powershell
+Invoke-ScriptAnalyzer -Path .\NPU-EstonianID -Recurse -Settings .\PSScriptAnalyzerSettings.psd1
+```
+
+Intentional exceptions are suppressed next to the code with a justification (`Invoke-ScriptAnalyzer ... -SuppressedOnly` lists them).
+
+---
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) for details.

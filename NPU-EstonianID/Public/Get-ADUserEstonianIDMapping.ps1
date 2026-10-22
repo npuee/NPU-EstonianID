@@ -14,6 +14,8 @@ function Get-ADUserEstonianIDMapping {
 
     .EXAMPLE
     Get-ADUser -Filter 'department -eq "Finance"' | Get-ADUserEstonianIDMapping
+    .OUTPUTS
+    System.String. The values of the account's altSecurityIdentities attribute.
     #>
     [CmdletBinding()]
     param(
@@ -22,7 +24,7 @@ function Get-ADUserEstonianIDMapping {
     )
 
     process {
-        Assert-ActiveDirectoryModule
+        _assertActiveDirectoryModule
         $userProperties = Get-ADUser -Identity $Identity -Properties altSecurityIdentities
         return $userProperties.altSecurityIdentities
     }

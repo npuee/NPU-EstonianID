@@ -25,6 +25,8 @@ function Get-IDUserMapping {
 
     .EXAMPLE
     '38001085718', '60001019906' | Get-IDUserMapping
+    .OUTPUTS
+    System.String. One X509:<I>...<SR>... mapping per certificate.
     #>
     [CmdletBinding(DefaultParameterSetName = 'Identity')]
     param(
@@ -48,7 +50,7 @@ function Get-IDUserMapping {
                 $certObj = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new([byte[]]$certObj)
             }
             if ($certObj -is [System.Security.Cryptography.X509Certificates.X509Certificate2]) {
-                _Format-X509StrongNameMapping -Certificate $certObj
+                _formatStrongNameMapping -Certificate $certObj
             }
             else {
                 throw "Invalid certificate object type: $($Certificate.GetType().FullName)"
@@ -68,7 +70,7 @@ function Get-IDUserMapping {
 
         foreach ($cert in $certs) {
             if ($cert) {
-                $mapping = _Format-X509StrongNameMapping -Certificate $cert
+                $mapping = _formatStrongNameMapping -Certificate $cert
                 if ($mapping -and -not $mappings.Contains($mapping)) {
                     $mappings.Add($mapping)
                     Write-Output $mapping
