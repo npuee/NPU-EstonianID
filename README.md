@@ -13,7 +13,8 @@ Built for vanilla **Windows PowerShell 5.1** and **PowerShell 7+** with no exter
 - **Card Generation Agnostic:** Tested and verified with both **2018 SK ID Solutions** cards (ECC NIST P-384, ESTEID2018) and **2025 Zetes** cards (ECC NIST P-384, ESTEID2025). Resolves the upstream OpenSSL RDN index bug on 2025 cards.
 - **Cross-Edition Compatibility:** Works seamlessly out-of-the-box on default Windows 10/11 Windows PowerShell 5.1 (`Desktop`) and modern PowerShell 7+ (`Core`).
 - **Soft Active Directory Dependency:** Encryption and LDAP certificate lookups can be run on any standalone machine or workstation. Active Directory cmdlets only require RSAT when explicitly called.
-- **Fail-Safe LDAP Resolution:** Queries both SK ID Solutions (`esteid.ldap.sk.ee:636`) and Zetes (`ldap.eidpki.ee:636`). If any directory is unreachable, lookups fail loudly instead of returning partial results, preventing accidental deletion of valid logon mappings or incomplete encryption.
+- **SK-first LDAP Resolution:** A person has at most one ID card, from SK ID Solutions (`esteid.ldap.sk.ee:636`, ESTEID2018) or Zetes (`ldap.eidpki.ee:636`, ESTEID2025), and may also have an SK Digi-ID. SK is searched first; Zetes only when SK has no ID card for the person. Mobile-ID, e-resident and residence permit certificates are ignored. If a directory that has to be searched is unreachable, lookups fail loudly instead of returning partial results, preventing accidental deletion of valid logon mappings or incomplete encryption.
+- **Card types:** AD mappings use the ID card and the Digi-ID; `Protect-Cdoc` encrypts for the ID card only. `Get-EstEIDCertificate -CardType` selects them, and returned certificates carry a `CardType` property (`IdCard` or `DigiId`).
 - **Dual-Tier LDAP Caching (v2):** 24-hour in-memory and disk cache (`%LOCALAPPDATA%\NPU-EstonianID\CertCache`) to stay safely below Zetes rate limits (60 req/hr), caching only complete query results. Certificates from the cache and from LDAP are only used if they are currently valid and their subject is `PNOEE-<personal code>`.
 
 ---
@@ -41,7 +42,7 @@ Import-Module NPU-EstonianID
 | Cmdlet | Description |
 | :--- | :--- |
 | `Protect-Cdoc` | Encrypts files or in-memory strings into standard CDOC 1.0 (`ENCDOC-XML\|1.1`) containers decryptable by DigiDoc4. |
-| `Get-EstEIDCertificate` | Resolves authentication certificates for 11-digit personal codes from SK or Zetes LDAP directories, optionally saving them as `.cer` files. |
+| `Get-EstEIDCertificate` | Resolves the ID card and Digi-ID authentication certificates of 11-digit personal codes from the SK or Zetes LDAP directories, optionally saving them as `.cer` files. |
 | `Get-IDUserMapping` | Formats certificates or personal codes into Active Directory `X509:<I>...<SR>...` strong name mapping strings. |
 | `Get-ADUserEstonianIDMapping` | Reads the current Estonian ID card mappings configured on an Active Directory user account. |
 | `Set-ADUserEstonianIDMapping` | Configures an AD user's `altSecurityIdentities` with strong name mappings, with write-suppression if already matching. |
@@ -96,16 +97,15 @@ Protect-Cdoc -InputString "System Recovery Token" -Certificate $cert -Out "recov
 
 ### 3. Resolving EstEID Certificates
 
-Fetch the active authentication certificate for an Estonian resident:
+Fetch the person's ID card (and Digi-ID, if any) authentication certificates:
 
 ```powershell
-# Returns an in-memory System.Security.Cryptography.X509Certificates.X509Certificate2 object
-$cert = Get-EstEIDCertificate -PersonalCode 60001019906
+# Returns in-memory System.Security.Cryptography.X509Certificates.X509Certificate2 objects with a CardType property
+Get-EstEIDCertificate -PersonalCode 60001019906 | Select-Object CardType, Subject, Issuer, NotAfter
 
-# Inspect certificate details
-$cert.Subject
+# Only the ID card certificate
+$cert = Get-EstEIDCertificate -PersonalCode 60001019906 -CardType IdCard
 $cert.Thumbprint
-$cert.NotAfter
 
 # Save the certificate(s) as cert_<ID>_<SerialNumber>.cer files; returns the saved files
 Get-EstEIDCertificate -PersonalCode 60001019906 -OutFolder C:\Certs

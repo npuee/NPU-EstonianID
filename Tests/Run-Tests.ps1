@@ -8,7 +8,7 @@ Write-Host "Running NPU-EstonianID Test Suite on PS Version $($PSVersionTable.PS
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 $modulePath = Resolve-Path (Join-Path -Path $PSScriptRoot -ChildPath '..\NPU-EstonianID\NPU-EstonianID.psd1')
-Write-Host "[1/13] Importing Module from: $modulePath"
+Write-Host "[1/14] Importing Module from: $modulePath"
 Import-Module $modulePath -Force
 
 # Points the module's LDAP directories at other servers; without arguments restores the real ones.
@@ -26,6 +26,15 @@ function Set-TestLdapServer {
     } $SK $SKPort $Zetes $ZetesPort
 }
 
+# Writes a disk cache entry with one certificate, in the module's cache format
+function Write-TestCacheEntry {
+    param([string]$Path, [string]$CardType, [byte[]]$CertBytes)
+    @{
+        Timestamp    = [DateTime]::UtcNow.ToString('o')
+        Certificates = @(@{ CardType = $CardType; Base64 = [Convert]::ToBase64String($CertBytes) })
+    } | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $Path -Encoding utf8
+}
+
 # Verify exported commands
 $exported = Get-Command -Module NPU-EstonianID
 Write-Host "Exported commands: $($exported.Name -join ', ')"
@@ -37,7 +46,7 @@ if (-not ($exported.Name -contains 'Get-EstEIDCertificate')) {
 }
 
 # 2. Test Soft ActiveDirectory check
-Write-Host "`n[2/13] Testing Soft Active Directory dependency check..."
+Write-Host "`n[2/14] Testing Soft Active Directory dependency check..."
 try {
     Get-ADUserEstonianIDMapping -Identity "testuser" -ErrorAction Stop
     Write-Warning "ActiveDirectory module is present on this system."
@@ -52,7 +61,7 @@ catch {
 }
 
 # 3. Load Test Certificates
-Write-Host "`n[3/13] Loading Test Certificates (2018 SK and 2025 Zetes)..."
+Write-Host "`n[3/14] Loading Test Certificates (2018 SK and 2025 Zetes)..."
 $cert2018Path = Join-Path -Path $PSScriptRoot -ChildPath 'cert_esteid2018_test.cer'
 $cert2025Path = Join-Path -Path $PSScriptRoot -ChildPath 'cert_esteid2025_test.cer'
 
@@ -71,7 +80,7 @@ if ([string]::IsNullOrWhiteSpace($name2025)) {
 Write-Host " PASS: SimpleName correctly extracted for both card generations." -ForegroundColor Green
 
 # 4. Test Strong Name Mapping string generation
-Write-Host "`n[4/13] Testing Strong Name Mapping Generation (Get-IDUserMapping)..."
+Write-Host "`n[4/14] Testing Strong Name Mapping Generation (Get-IDUserMapping)..."
 $mapping2018 = Get-IDUserMapping -Certificate $cert2018
 $mapping2025 = Get-IDUserMapping -Certificate $cert2025
 Write-Host " 2018 Mapping: $mapping2018"
@@ -86,7 +95,7 @@ if (-not $mapping2025.StartsWith("X509:<I>") -or -not $mapping2025.Contains("<SR
 Write-Host " PASS: Strong name mapping strings generated successfully." -ForegroundColor Green
 
 # 5. Test CDOC 1.0 Encryption for 2025 Zetes Card
-Write-Host "`n[5/13] Testing CDOC Encryption with 2025 Zetes Card (Native PS & bcrypt.dll)..."
+Write-Host "`n[5/14] Testing CDOC Encryption with 2025 Zetes Card (Native PS & bcrypt.dll)..."
 $testPlaintext = "Hello Estonian ID! This is a confidential test encrypted with pure native PowerShell."
 $testFile = Join-Path -Path $env:TEMP -ChildPath "npu_test_doc.txt"
 [System.IO.File]::WriteAllText($testFile, $testPlaintext)
@@ -108,7 +117,7 @@ if ($encKey.Recipient -ne $name2025) {
 Write-Host " PASS: Recipient attribute is non-empty and matches '$name2025' perfectly!" -ForegroundColor Green
 
 # 6. Test Multi-Recipient Encryption (2018 + 2025 cards)
-Write-Host "`n[6/13] Testing Multi-Recipient Encryption (2018 + 2025 simultaneously)..."
+Write-Host "`n[6/14] Testing Multi-Recipient Encryption (2018 + 2025 simultaneously)..."
 $testCdocMulti = Join-Path -Path $env:TEMP -ChildPath "npu_test_multi.cdoc"
 if (Test-Path $testCdocMulti) { Remove-Item $testCdocMulti -Force }
 
@@ -124,7 +133,7 @@ Write-Host " Recipient 2: $($encKeys[1].Recipient)"
 Write-Host " PASS: Multi-recipient CDOC container generated with 2 keys." -ForegroundColor Green
 
 # 7. Test In-Memory String Encryption
-Write-Host "`n[7/13] Testing In-Memory String Encryption (-InputString)..."
+Write-Host "`n[7/14] Testing In-Memory String Encryption (-InputString)..."
 $testCdocString = Join-Path -Path $env:TEMP -ChildPath "npu_test_string.cdoc"
 if (Test-Path $testCdocString) { Remove-Item $testCdocString -Force }
 
@@ -170,7 +179,7 @@ finally {
 Write-Host " PASS: Piped lines encrypted as a single 'pipe.txt' inside 'pipe.cdoc'." -ForegroundColor Green
 
 # 8. Test Incomplete LDAP Directory Outage Handling
-Write-Host "`n[8/13] Testing Incomplete LDAP Outage Handling (Failure Isolation & Zero Caching)..."
+Write-Host "`n[8/14] Testing Incomplete LDAP Outage Handling (Failure Isolation & Zero Caching)..."
 $v2CacheDir = & (Get-Module NPU-EstonianID) { $script:CacheFolder }
 $fakeID = '00000000000'
 $fakeCacheFile = Join-Path -Path $v2CacheDir -ChildPath "$fakeID.json"
@@ -184,7 +193,8 @@ if (Test-Path -LiteralPath $tempCdocFail) {
 }
 
 try {
-    Set-TestLdapServer -Zetes '127.0.0.1' -ZetesPort 1
+    # SK is searched first and its failure ends the lookup, so both directories are taken offline
+    Set-TestLdapServer -SK '127.0.0.1' -SKPort 1 -Zetes '127.0.0.1' -ZetesPort 1
 
     # 1. Assert Get-EstEIDCertificate throws with 'incomplete' and '127.0.0.1'
     $threwCert = $false
@@ -284,7 +294,7 @@ finally {
 }
 
 # 9. Decryption Round-Trip Test (End-to-End Key Unwrap + AES-GCM Decrypt)
-Write-Host "`n[9/13] Testing Full Decryption Round-Trip (ECDH + Key Unwrap + AES-GCM Decrypt)..."
+Write-Host "`n[9/14] Testing Full Decryption Round-Trip (ECDH + Key Unwrap + AES-GCM Decrypt)..."
 if ($PSVersionTable.PSVersion.Major -ge 7) {
     if (-not ([System.Management.Automation.PSTypeName]'KwUnwrap').Type) {
         Add-Type -TypeDefinition @"
@@ -355,7 +365,7 @@ else {
 }
 
 # 10. OU batch reports Set-ADUser failures (fake ActiveDirectory module, cached certificate, no network)
-Write-Host "`n[10/13] Testing Set-ADOUEstonianIDMapping failure reporting (mock Active Directory)..."
+Write-Host "`n[10/14] Testing Set-ADOUEstonianIDMapping failure reporting (mock Active Directory)..."
 if (Get-Module -ListAvailable -Name ActiveDirectory) {
     Write-Host " SKIP: real ActiveDirectory module is installed; not shadowing it with a mock" -ForegroundColor Yellow
 }
@@ -368,10 +378,7 @@ else {
     try {
         # Seed the disk cache so the lookup never touches LDAP; point LDAP at a closed port so any hit fails loudly
         $null = New-Item -ItemType Directory -Path $adCacheDir -Force
-        @{
-            Timestamp   = [DateTime]::UtcNow.ToString('o')
-            Base64Certs = @([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($cert2025Path)))
-        } | ConvertTo-Json | Set-Content -LiteralPath $adCacheFile -Encoding utf8
+        Write-TestCacheEntry -Path $adCacheFile -CardType IdCard -CertBytes ([System.IO.File]::ReadAllBytes($cert2025Path))
         Set-TestLdapServer -SK '127.0.0.1' -SKPort 1 -Zetes '127.0.0.1' -ZetesPort 1
 
         New-Module -Name ActiveDirectory -ScriptBlock {
@@ -435,16 +442,13 @@ else {
 }
 
 # 11. Recipient certificate validation (cache contents, validity period, curve)
-Write-Host "`n[11/13] Testing recipient certificate validation..."
+Write-Host "`n[11/14] Testing recipient certificate validation..."
 $poisonId = '00000000003'
 $poisonFile = Join-Path -Path (& (Get-Module NPU-EstonianID) { $script:CacheFolder }) -ChildPath "$poisonId.json"
 try {
     # A cache entry holding someone else's certificate must be ignored, not used for encryption
     $null = New-Item -ItemType Directory -Path (Split-Path -Path $poisonFile) -Force
-    @{
-        Timestamp   = [DateTime]::UtcNow.ToString('o')
-        Base64Certs = @([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($cert2025Path)))
-    } | ConvertTo-Json | Set-Content -LiteralPath $poisonFile -Encoding utf8
+    Write-TestCacheEntry -Path $poisonFile -CardType IdCard -CertBytes ([System.IO.File]::ReadAllBytes($cert2025Path))
     Set-TestLdapServer -SK '127.0.0.1' -SKPort 1 -Zetes '127.0.0.1' -ZetesPort 1
 
     $wv = $null
@@ -495,10 +499,7 @@ $saveCacheFile = Join-Path -Path (& (Get-Module NPU-EstonianID) { $script:CacheF
 $saveCacheBackup = if (Test-Path -LiteralPath $saveCacheFile) { Get-Content -LiteralPath $saveCacheFile -Raw }
 $saveDir = Join-Path -Path $env:TEMP -ChildPath ("npu_test_save_" + [guid]::NewGuid().ToString('N'))
 try {
-    @{
-        Timestamp   = [DateTime]::UtcNow.ToString('o')
-        Base64Certs = @([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($cert2025Path)))
-    } | ConvertTo-Json | Set-Content -LiteralPath $saveCacheFile -Encoding utf8
+    Write-TestCacheEntry -Path $saveCacheFile -CardType IdCard -CertBytes ([System.IO.File]::ReadAllBytes($cert2025Path))
     Set-TestLdapServer -SK '127.0.0.1' -SKPort 1 -Zetes '127.0.0.1' -ZetesPort 1
 
     $saved = @(Get-EstEIDCertificate -ID $saveId -UseCache -OutFolder $saveDir -ErrorAction Stop)
@@ -523,8 +524,150 @@ finally {
     Set-TestLdapServer
 }
 
-# 12. Help: every exported command documents itself for Get-Help
-Write-Host "`n[12/13] Testing help texts..."
+# 12. Lookup rules with fake directory answers (no network): SK first, Zetes only without an SK ID card,
+#     ID card and Digi-ID recognised by their directory branch, everything else ignored
+Write-Host "`n[12/14] Testing SK/Zetes lookup rules (fake directory answers)..."
+$npuModule = Get-Module NPU-EstonianID
+$realSearch = & $npuModule { ${function:_searchLdapDirectory} }
+$lookupId = '38001085718'
+$lookupCacheFile = Join-Path -Path (& $npuModule { $script:CacheFolder }) -ChildPath "$lookupId.json"
+$lookupCacheBackup = if (Test-Path -LiteralPath $lookupCacheFile) { Get-Content -LiteralPath $lookupCacheFile -Raw }
+
+function New-TestCardCert {
+    param([string]$Name)
+    $key = [System.Security.Cryptography.ECDsa]::Create([System.Security.Cryptography.ECCurve]::CreateFromFriendlyName('nistP384'))
+    $req = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new("SERIALNUMBER=PNOEE-$lookupId, CN=$Name", $key, [System.Security.Cryptography.HashAlgorithmName]::SHA384)
+    $req.CreateSelfSigned([DateTimeOffset]::Now.AddDays(-1), [DateTimeOffset]::Now.AddDays(365))
+}
+function New-SkEntry {
+    param($Cert, [string]$Branch, [string]$Ou = 'Authentication')
+    [pscustomobject]@{ Path = "LDAP://sk.test:636/cn=TEST\,PERSON\,$lookupId,ou=$Ou,o=$Branch,dc=ESTEID,c=EE"; Value = $Cert.RawData }
+}
+function New-ZetesEntry {
+    param($Cert, [string]$Branch)
+    # Value as a Base64 string, as some directories return it
+    [pscustomobject]@{ Path = "LDAP://zetes.test:636/cn=TEST\,PERSON\,$lookupId,ou=Authentication,o=$Branch,dc=ldap,dc=eidpki,dc=ee"; Value = [Convert]::ToBase64String($Cert.RawData) }
+}
+$skIdCard    = New-TestCardCert 'SK ID card'
+$skDigiId    = New-TestCardCert 'SK Digi-ID'
+$zetesIdCard = New-TestCardCert 'Zetes ID card'
+$ignored = @(
+    New-SkEntry (New-TestCardCert 'Mobile-ID') 'Mobile-ID'
+    New-SkEntry (New-TestCardCert 'e-resident') 'e-resident digital identity card'
+    New-SkEntry (New-TestCardCert 'Residence permit') 'Residence permit card'
+    New-SkEntry (New-TestCardCert 'Signing') 'Identity card of Estonian citizen' 'Digital Signature'
+)
+
+# Fake directories: server name -> entries, or 'fail'. Every search is logged as "server authtype filter".
+$global:FakeLdap = @{}
+$global:LdapSearches = [System.Collections.Generic.List[string]]::new()
+& $npuModule {
+    function script:_searchLdapDirectory {
+        param($Server, $Port, $BaseDN, $AuthenticationType, $Filter)
+        $global:LdapSearches.Add("$Server $AuthenticationType $Filter")
+        $answer = $global:FakeLdap[$Server]
+        if ($answer -is [string] -and $answer -eq 'fail') { throw 'The server is not operational.' }
+        $answer
+    }
+}
+function Invoke-Lookup {
+    param([hashtable]$Directories, [string[]]$CardType = @('IdCard', 'DigiId'), [switch]$UseCache)
+    $global:FakeLdap = $Directories
+    $global:LdapSearches.Clear()
+    $warnings = $null
+    @(Get-EstEIDCertificate -ID $lookupId -CardType $CardType -UseCache:$UseCache -ErrorAction Stop -WarningAction SilentlyContinue -WarningVariable warnings)
+    $global:LookupWarnings = @($warnings | ForEach-Object { "$_" })
+}
+function Get-LookupSummary {
+    param($Certs)
+    (@($Certs | ForEach-Object { "$($_.CardType):$($_.Thumbprint)" }) -join ',')
+}
+
+try {
+    Set-TestLdapServer -SK 'sk.test' -SKPort 636 -Zetes 'zetes.test' -ZetesPort 636
+    $skSearch = "sk.test Anonymous (serialNumber=PNOEE-$lookupId)"
+    $zetesSearch = "zetes.test FastBind (serialNumber=PNOEE-$lookupId)"
+
+    # SK ID card: Zetes is not searched
+    $certs = Invoke-Lookup @{ 'sk.test' = @(New-SkEntry $skIdCard 'Identity card of Estonian citizen'); 'zetes.test' = 'fail' }
+    if ((Get-LookupSummary $certs) -ne "IdCard:$($skIdCard.Thumbprint)") { throw "SK ID card: got $(Get-LookupSummary $certs)" }
+    if (($global:LdapSearches -join ' | ') -ne $skSearch) { throw "SK ID card: searches were $($global:LdapSearches -join ' | ')" }
+    Write-Host " PASS: SK ID card found -> Zetes not searched (even when Zetes is down)." -ForegroundColor Green
+
+    # SK ID card + Digi-ID + entries to ignore: both cards, still no Zetes search
+    $certs = Invoke-Lookup @{ 'sk.test' = @((New-SkEntry $skIdCard 'Identity card of Estonian citizen'), (New-SkEntry $skDigiId 'Digital identity card')) + $ignored }
+    if ((Get-LookupSummary $certs) -ne "IdCard:$($skIdCard.Thumbprint),DigiId:$($skDigiId.Thumbprint)") { throw "SK ID card + Digi-ID: got $(Get-LookupSummary $certs)" }
+    if ($global:LdapSearches.Count -ne 1) { throw "SK ID card + Digi-ID: searches were $($global:LdapSearches -join ' | ')" }
+    Write-Host " PASS: SK ID card + Digi-ID returned with card types; Mobile-ID, e-resident, residence permit and signing entries ignored." -ForegroundColor Green
+
+    # SK Digi-ID only: Zetes is searched (FastBind) and its ID card (Base64 value) is added
+    $certs = Invoke-Lookup @{ 'sk.test' = @(New-SkEntry $skDigiId 'Digital identity card'); 'zetes.test' = @(New-ZetesEntry $zetesIdCard 'IdentityCardEstonianCitizen') }
+    if ((Get-LookupSummary $certs) -ne "DigiId:$($skDigiId.Thumbprint),IdCard:$($zetesIdCard.Thumbprint)") { throw "Digi-ID + Zetes: got $(Get-LookupSummary $certs)" }
+    if (($global:LdapSearches -join ' | ') -ne "$skSearch | $zetesSearch") { throw "Digi-ID + Zetes: searches were $($global:LdapSearches -join ' | ')" }
+    Write-Host " PASS: SK Digi-ID only -> Zetes searched; Zetes ID card (Base64 value) added." -ForegroundColor Green
+
+    # Nothing usable at SK: Zetes is searched; nothing anywhere is an empty result, not an error
+    $certs = Invoke-Lookup @{ 'sk.test' = $ignored; 'zetes.test' = @(New-ZetesEntry $zetesIdCard 'IdentityCardEstonianCitizen') }
+    if ((Get-LookupSummary $certs) -ne "IdCard:$($zetesIdCard.Thumbprint)") { throw "Zetes ID card: got $(Get-LookupSummary $certs)" }
+    $certs = Invoke-Lookup @{ 'sk.test' = @(); 'zetes.test' = @() }
+    if ($certs.Count -ne 0 -or $global:LdapSearches.Count -ne 2) { throw "Nothing found: got $(Get-LookupSummary $certs), searches $($global:LdapSearches.Count)" }
+    Write-Host " PASS: No SK card -> Zetes ID card found; no card anywhere -> empty result." -ForegroundColor Green
+
+    # Outages: SK down ends the lookup; Zetes down matters only when Zetes has to be searched
+    foreach ($case in @(
+        @{ Name = 'SK down'; Directories = @{ 'sk.test' = 'fail'; 'zetes.test' = @(New-ZetesEntry $zetesIdCard 'IdentityCardEstonianCitizen') }; Server = 'sk.test'; Searches = 1 },
+        @{ Name = 'Digi-ID, Zetes down'; Directories = @{ 'sk.test' = @(New-SkEntry $skDigiId 'Digital identity card'); 'zetes.test' = 'fail' }; Server = 'zetes.test'; Searches = 2 }
+    )) {
+        $message = $null
+        try { $null = Invoke-Lookup $case.Directories } catch { $message = $_.Exception.Message }
+        if ($message -notmatch "incomplete: $([regex]::Escape($case.Server)): The server is not operational") { throw "$($case.Name): expected an incomplete-lookup error for $($case.Server), got '$message'" }
+        if ($global:LdapSearches.Count -ne $case.Searches) { throw "$($case.Name): expected $($case.Searches) search(es), got $($global:LdapSearches -join ' | ')" }
+    }
+    Write-Host " PASS: SK down -> error without searching Zetes; Zetes down -> error only when Zetes is needed." -ForegroundColor Green
+
+    # Callers: -CardType, mappings for both cards, Protect-Cdoc with the ID card only
+    $skBoth = @{ 'sk.test' = @((New-SkEntry $skIdCard 'Identity card of Estonian citizen'), (New-SkEntry $skDigiId 'Digital identity card')) }
+    $certs = Invoke-Lookup $skBoth -CardType IdCard
+    if ((Get-LookupSummary $certs) -ne "IdCard:$($skIdCard.Thumbprint)") { throw "-CardType IdCard: got $(Get-LookupSummary $certs)" }
+    $global:FakeLdap = $skBoth
+    $mappings = @(Get-IDUserMapping -EstonianID $lookupId -ErrorAction Stop)
+    if ($mappings.Count -ne 2) { throw "Get-IDUserMapping should map ID card and Digi-ID, got $($mappings.Count): $mappings" }
+    $lookupCdoc = Join-Path -Path $env:TEMP -ChildPath 'npu_test_lookup.cdoc'
+    Protect-Cdoc -InputString 'x' -ID $lookupId -Out $lookupCdoc -NoCache -ErrorAction Stop
+    $recipients = @(([xml](Get-Content -Raw -Encoding UTF8 -LiteralPath $lookupCdoc)).EncryptedData.KeyInfo.EncryptedKey)
+    Remove-Item -LiteralPath $lookupCdoc -Force
+    if ($recipients.Count -ne 1 -or $recipients[0].Recipient -ne 'SK ID card') { throw "Protect-Cdoc should encrypt for the ID card only, got: $($recipients.Recipient -join ', ')" }
+    $global:FakeLdap = @{ 'sk.test' = @(New-SkEntry $skDigiId 'Digital identity card'); 'zetes.test' = @() }
+    $message = $null
+    try { Protect-Cdoc -InputString 'x' -ID $lookupId -Out $lookupCdoc -NoCache -ErrorAction Stop } catch { $message = $_.Exception.Message }
+    if ($message -notmatch 'Unable to find an ID card certificate .*Digi-ID certificates are not used for encryption' -or (Test-Path -LiteralPath $lookupCdoc)) { throw "Protect-Cdoc with Digi-ID only: '$message'" }
+    Write-Host " PASS: -CardType filters; Get-IDUserMapping maps ID card + Digi-ID; Protect-Cdoc encrypts for the ID card only." -ForegroundColor Green
+
+    # Cache keeps card types; files without card types (older versions) are ignored
+    if (Test-Path -LiteralPath $lookupCacheFile) { Remove-Item -LiteralPath $lookupCacheFile -Force }
+    & $npuModule { $script:MemoryCache.Clear() }
+    $first = Invoke-Lookup $skBoth -UseCache
+    if ($global:LookupWarnings.Count -ne 0) { throw "A lookup without a cache entry should not warn, got: $($global:LookupWarnings -join '; ')" }
+    & $npuModule { $script:MemoryCache.Clear() }
+    $second = Invoke-Lookup @{ 'sk.test' = 'fail'; 'zetes.test' = 'fail' } -UseCache
+    if ($global:LdapSearches.Count -ne 0 -or (Get-LookupSummary $second) -ne (Get-LookupSummary $first)) { throw "Cache: searches $($global:LdapSearches.Count), got $(Get-LookupSummary $second) instead of $(Get-LookupSummary $first)" }
+    @{ Timestamp = [DateTime]::UtcNow.ToString('o'); Base64Certs = @([Convert]::ToBase64String($skIdCard.RawData)) } | ConvertTo-Json | Set-Content -LiteralPath $lookupCacheFile -Encoding utf8
+    & $npuModule { $script:MemoryCache.Clear() }
+    $null = Invoke-Lookup $skBoth -UseCache
+    if ($global:LdapSearches.Count -ne 1) { throw "A cache file without card types should be ignored, searches: $($global:LdapSearches.Count)" }
+    Write-Host " PASS: Disk cache keeps card types; cache files without card types are ignored." -ForegroundColor Green
+}
+finally {
+    & $npuModule { param($original) Set-Item -Path function:script:_searchLdapDirectory -Value $original } $realSearch
+    & $npuModule { $script:MemoryCache.Clear() }
+    Set-TestLdapServer
+    if ($lookupCacheBackup) { Set-Content -LiteralPath $lookupCacheFile -Value $lookupCacheBackup -Encoding utf8 -NoNewline }
+    else { Remove-Item -LiteralPath $lookupCacheFile -ErrorAction SilentlyContinue }
+    Remove-Variable -Name FakeLdap, LdapSearches -Scope Global -ErrorAction SilentlyContinue
+}
+
+# 13. Help: every exported command documents itself for Get-Help
+Write-Host "`n[13/14] Testing help texts..."
 foreach ($name in (Get-Module NPU-EstonianID).ExportedFunctions.Keys) {
     $help = Get-Help $name -Full
     if (-not $help.Synopsis -or $help.Synopsis.Trim() -like "$name *" -or $help.Synopsis.Trim() -eq $name) { throw "$name has no written synopsis" }
@@ -537,8 +680,8 @@ foreach ($name in (Get-Module NPU-EstonianID).ExportedFunctions.Keys) {
 }
 Write-Host " PASS: Every exported command has a synopsis, description, examples, outputs and documented parameters." -ForegroundColor Green
 
-# 13. PSScriptAnalyzer: no findings with the repository settings (default rules + PowerShell 5.1/7 compatibility)
-Write-Host "`n[13/13] Running PSScriptAnalyzer..."
+# 14. PSScriptAnalyzer: no findings with the repository settings (default rules + PowerShell 5.1/7 compatibility)
+Write-Host "`n[14/14] Running PSScriptAnalyzer..."
 if (Get-Module -ListAvailable -Name PSScriptAnalyzer) {
     $moduleFolder = Join-Path -Path $PSScriptRoot -ChildPath '..\NPU-EstonianID'
     # PSScriptAnalyzer 1.25 fails on one file of the first multi-file run in a process; warm it up on a single file

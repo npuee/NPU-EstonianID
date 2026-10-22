@@ -26,7 +26,8 @@ function Protect-Cdoc {
         If pointing to an existing directory, the same default name is used inside it.
     .PARAMETER ID
         One or more 11-digit Estonian personal codes (e.g. '38001085718', '60001019906').
-        Certificates are looked up in-memory via LDAP and cached locally.
+        The person's ID card certificate (SK or Zetes) is looked up in-memory via LDAP and cached locally;
+        Digi-ID certificates are never used for encryption.
     .PARAMETER Certificate
         One or more X509Certificate2 objects or certificate byte arrays representing recipient public certificates.
     .PARAMETER PassThru
@@ -183,10 +184,11 @@ function _protectCdocItem {
 
     if ($ID) {
         foreach ($code in $ID) {
-            Write-Verbose "Resolving certificate for personal code: $code"
-            $certs = @(Get-EstEIDCertificate -ID $code -UseCache:(-not $NoCache) -ErrorAction Stop)
+            Write-Verbose "Resolving ID card certificate for personal code: $code"
+            # Encrypt for the person's ID card only, never for a Digi-ID
+            $certs = @(Get-EstEIDCertificate -ID $code -CardType IdCard -UseCache:(-not $NoCache) -ErrorAction Stop)
             if (-not $certs -or $certs.Count -eq 0) {
-                throw "Unable to find an authentication certificate for Estonian personal code '$code'."
+                throw "Unable to find an ID card certificate for Estonian personal code '$code' (Digi-ID certificates are not used for encryption)."
             }
             foreach ($c in $certs) {
                 $recipientCerts.Add($c)

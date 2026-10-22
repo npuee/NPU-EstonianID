@@ -1,15 +1,27 @@
 function Get-EstEIDCertificate {
     <#
     .SYNOPSIS
-    Retrieves public X.509 authentication/encryption certificates from Estonian eID LDAP directories.
+    Retrieves the ID card and Digi-ID authentication certificates of an Estonian personal code from the eID LDAP directories.
 
     .DESCRIPTION
-    Queries both SK ID Solutions (esteid.ldap.sk.ee) and Thales / Zetes (ldap.eidpki.ee) directory services
-    for authentication certificates belonging to the specified 11-digit Estonian personal code.
+    A person has at most one ID card, issued either by SK ID Solutions (ESTEID2018) or by Zetes (ESTEID2025),
+    and may also have an SK Digi-ID (the blue card, being phased out).
+
+    SK ID Solutions (esteid.ldap.sk.ee) is searched first. If it has the person's ID card, Zetes
+    (ldap.eidpki.ee) is not searched; otherwise (no SK certificate, or only a Digi-ID) Zetes is searched too.
+    Mobile-ID, e-resident and residence permit certificates are ignored. Certificates are only returned if they
+    are currently valid and issued to the personal code.
+
+    If a directory that has to be searched cannot be reached, an error is written and nothing is returned,
+    so callers never act on a partial answer.
+
     Returns in-memory X509Certificate2 objects directly without saving temporary files to disk.
 
     .PARAMETER ID
     11-digit Estonian personal identification code (isikukood). Accepts pipeline input.
+
+    .PARAMETER CardType
+    Which certificates to return: IdCard, DigiId or both (default). Protect-Cdoc uses IdCard only.
 
     .PARAMETER UseCache
     Enables local disk and in-memory caching to avoid rate limits during bulk queries. Disabled by default (live queries).
@@ -25,6 +37,10 @@ function Get-EstEIDCertificate {
     Get-EstEIDCertificate -ID '38001085718'
 
     .EXAMPLE
+    # Only the ID card certificate, with the card type shown
+    Get-EstEIDCertificate -ID '38001085718' -CardType IdCard | Select-Object CardType, Subject, Issuer, NotAfter
+
+    .EXAMPLE
     # Use cached certificate if available
     Get-EstEIDCertificate -ID '38001085718' -UseCache
 
@@ -35,8 +51,10 @@ function Get-EstEIDCertificate {
     .EXAMPLE
     # Save the certificates to files
     Get-EstEIDCertificate -ID '38001085718' -OutFolder C:\Certs
+
     .OUTPUTS
-    System.Security.Cryptography.X509Certificates.X509Certificate2 by default; System.Byte[] with -Raw; System.IO.FileInfo (the saved .cer files) with -OutFolder.
+    System.Security.Cryptography.X509Certificates.X509Certificate2 by default, with a CardType property (IdCard or DigiId);
+    System.Byte[] with -Raw; System.IO.FileInfo (the saved .cer files) with -OutFolder.
     #>
     [CmdletBinding(DefaultParameterSetName = 'Object')]
     param(
@@ -44,6 +62,10 @@ function Get-EstEIDCertificate {
         [ValidatePattern('^\d{11}$')]
         [Alias('EstonianID', 'PersonalCode', 'Isikukood')]
         [string]$ID,
+
+        [Parameter()]
+        [ValidateSet('IdCard', 'DigiId')]
+        [string[]]$CardType = @('IdCard', 'DigiId'),
 
         [Parameter()]
         [switch]$UseCache,
@@ -56,9 +78,8 @@ function Get-EstEIDCertificate {
     )
 
     process {
-        $certByteList = $null
         try {
-            $certByteList = _getLdapCertificates -ID $ID -UseCache:$UseCache
+            $entries = @(_getLdapCertificates -ID $ID -UseCache:$UseCache)
         }
         catch {
             Write-Error -Message $_.Exception.Message `
@@ -68,51 +89,35 @@ function Get-EstEIDCertificate {
             return
         }
 
-        if (-not $certByteList -or $certByteList.Count -eq 0) {
-            Write-Verbose "No certificates found for ID '$ID'."
+        $entries = @($entries | Where-Object { $CardType -contains $_.CardType })
+        if ($entries.Count -eq 0) {
+            Write-Verbose "No $($CardType -join '/') certificates found for ID '$ID'."
             return
         }
 
-        # Normalize certificate items, guarding against PowerShell pipeline unrolling
-        $certItems = [System.Collections.Generic.List[byte[]]]::new()
-        if ($certByteList -is [byte[]]) {
-            $certItems.Add($certByteList)
-        }
-        elseif ($certByteList.Count -gt 0 -and $certByteList[0] -is [byte]) {
-            $certItems.Add([byte[]]$certByteList)
-        }
-        else {
-            foreach ($item in $certByteList) {
-                if ($item -is [byte[]]) {
-                    $certItems.Add($item)
-                }
-            }
-        }
-
-        foreach ($bytes in $certItems) {
+        foreach ($entry in $entries) {
             if ($Raw) {
-                Write-Output $bytes
+                Write-Output (, $entry.CertBytes)
+                continue
+            }
+            try {
+                $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($entry.CertBytes)
+            }
+            catch {
+                Write-Warning "Failed to parse certificate bytes for ID '$ID': $($_.Exception.Message)"
+                continue
+            }
+            if ($PSCmdlet.ParameterSetName -eq 'Save') {
+                $folder = $PSCmdlet.GetUnresolvedProviderPathFromPSPath($OutFolder)
+                if (-not (Test-Path -LiteralPath $folder -PathType Container)) {
+                    $null = New-Item -ItemType Directory -Path $folder -Force
+                }
+                $certFile = Join-Path -Path $folder -ChildPath "cert_${ID}_$($cert.SerialNumber).cer"
+                [System.IO.File]::WriteAllBytes($certFile, $cert.RawData)
+                Get-Item -LiteralPath $certFile
             }
             else {
-                try {
-                    $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($bytes)
-                }
-                catch {
-                    Write-Warning "Failed to parse certificate bytes for ID '$ID': $($_.Exception.Message)"
-                    continue
-                }
-                if ($PSCmdlet.ParameterSetName -eq 'Save') {
-                    $folder = $PSCmdlet.GetUnresolvedProviderPathFromPSPath($OutFolder)
-                    if (-not (Test-Path -LiteralPath $folder -PathType Container)) {
-                        $null = New-Item -ItemType Directory -Path $folder -Force
-                    }
-                    $certFile = Join-Path -Path $folder -ChildPath "cert_${ID}_$($cert.SerialNumber).cer"
-                    [System.IO.File]::WriteAllBytes($certFile, $cert.RawData)
-                    Get-Item -LiteralPath $certFile
-                }
-                else {
-                    Write-Output $cert
-                }
+                $cert | Add-Member -NotePropertyName CardType -NotePropertyValue $entry.CardType -PassThru
             }
         }
     }

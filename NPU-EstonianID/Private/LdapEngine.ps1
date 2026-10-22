@@ -11,6 +11,9 @@ $script:ThalesLdapURL = "ldap.eidpki.ee"
 $script:ThalesLdapPort = 636
 $script:ThalesLdapDN = "dc=ldap,dc=eidpki,dc=ee"
 
+# Longest wait for one directory's search results
+$script:LdapTimeoutSeconds = 15
+
 # Caching Configuration (Protects against Zetes 60 req/hr rate limits)
 # Kept in the user profile, not %TEMP%: whoever can write the cache decides who Protect-Cdoc encrypts to,
 # and for SYSTEM %TEMP% is C:\Windows\Temp, which every local user can write to.
@@ -18,6 +21,103 @@ $localAppData = [Environment]::GetFolderPath('LocalApplicationData')
 $script:CacheFolder = if ($localAppData) { Join-Path -Path $localAppData -ChildPath 'NPU-EstonianID\CertCache' } else { $null }
 $script:CacheTTLHours = 24
 $script:MemoryCache = @{}
+
+# Card types the module uses. 'IdCard' is the person's ID card (SK or Zetes); 'DigiId' is the SK Digi-ID (blue card).
+$script:CardTypes = @('IdCard', 'DigiId')
+
+# The directories in search order. CardTypes maps an entry's o= branch (under ou=Authentication) to a card type;
+# other branches (Mobile-ID, e-resident and residence permit cards) are skipped.
+function _getLdapDirectories {
+    @(
+        [pscustomobject]@{
+            Name               = 'SK ID Solutions'
+            Server             = $script:EstIDLdapURL
+            Port               = $script:EstIDLdapPort
+            BaseDN             = $script:EstIDLdapDN
+            AuthenticationType = 'Anonymous'
+            CardTypes          = @{ 'Identity card of Estonian citizen' = 'IdCard'; 'Digital identity card' = 'DigiId' }
+        }
+        [pscustomobject]@{
+            Name               = 'Zetes'
+            Server             = $script:ThalesLdapURL
+            Port               = $script:ThalesLdapPort
+            BaseDN             = $script:ThalesLdapDN
+            # FastBind required to avoid 0x80005000 schema discovery errors on Zetes
+            AuthenticationType = 'FastBind'
+            CardTypes          = @{ 'IdentityCardEstonianCitizen' = 'IdCard' }
+        }
+    )
+}
+
+# Queries one LDAP directory and returns its raw entries: Path (the entry's LDAP path) and Value (the first
+# userCertificate;binary value, as returned by the directory). The only function that talks to the network;
+# the tests replace it with fake directory answers.
+function _searchLdapDirectory {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Server,
+
+        [Parameter(Mandatory = $true)]
+        [int]$Port,
+
+        [Parameter(Mandatory = $true)]
+        [string]$BaseDN,
+
+        [Parameter(Mandatory = $true)]
+        [string]$AuthenticationType,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Filter
+    )
+
+    $entry = $null
+    $searcher = $null
+    $results = $null
+    try {
+        $auth = [System.DirectoryServices.AuthenticationTypes]$AuthenticationType
+        $entry = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$Server`:$Port/$BaseDN", $null, $null, $auth)
+        $searcher = New-Object System.DirectoryServices.DirectorySearcher($entry)
+        $searcher.Filter = $Filter
+        $searcher.ClientTimeout = [TimeSpan]::FromSeconds($script:LdapTimeoutSeconds)
+        $searcher.ServerTimeLimit = [TimeSpan]::FromSeconds($script:LdapTimeoutSeconds)
+        [void]$searcher.PropertiesToLoad.Add('usercertificate;binary')
+
+        $results = $searcher.FindAll()
+        foreach ($result in $results) {
+            $values = $result.Properties['usercertificate;binary']
+            if ($values.Count -gt 0) {
+                [pscustomobject]@{ Path = $result.Path; Value = $values[0] }
+            }
+        }
+    }
+    finally {
+        if ($results)  { try { $results.Dispose() } catch { Write-Verbose "Ignoring error while closing $Server search results: $($_.Exception.Message)" } }
+        if ($searcher) { try { $searcher.Dispose() } catch { Write-Verbose "Ignoring error while closing $Server LDAP search: $($_.Exception.Message)" } }
+        if ($entry)    { try { $entry.Dispose() } catch { Write-Verbose "Ignoring error while closing $Server LDAP connection: $($_.Exception.Message)" } }
+    }
+}
+
+# Card type of an LDAP entry, from the o= branch under ou=Authentication in its path; $null if the
+# directory's CardTypes does not list it
+function _getCardType {
+    param(
+        [string]$Path,
+        [hashtable]$CardTypes
+    )
+
+    $dn = $Path -replace '^LDAP://[^/]*/', ''
+    # Split on commas that are not escaped (the CN contains "SURNAME\,GIVENNAME\,CODE")
+    $parts = @([regex]::Split($dn, '(?<!\\),') | ForEach-Object { $_.Trim() })
+    if ($parts -notcontains 'ou=Authentication') {
+        return $null
+    }
+    foreach ($part in $parts) {
+        if ($part -match '^o=(.+)$' -and $CardTypes.ContainsKey($Matches[1])) {
+            return $CardTypes[$Matches[1]]
+        }
+    }
+    return $null
+}
 
 # Returns $null if the certificate is currently valid and issued to the personal code, otherwise the reason it is not.
 function _getCertificateProblem {
@@ -42,54 +142,59 @@ function _getCertificateProblem {
     return $null
 }
 
+# Cached lookup result for a personal code: CardType + CertBytes entries, or nothing (so @() stays empty)
 function _getCachedCertificates {
     param([string]$ID)
 
     # 1. Check in-memory cache
     if ($script:MemoryCache.ContainsKey($ID)) {
-        $entry = $script:MemoryCache[$ID]
-        if ((([DateTime]::UtcNow) - $entry.Timestamp).TotalHours -lt $script:CacheTTLHours) {
-            return , $entry.CertBytesList
+        $memoryEntry = $script:MemoryCache[$ID]
+        if ((([DateTime]::UtcNow) - $memoryEntry.Timestamp).TotalHours -lt $script:CacheTTLHours) {
+            return $memoryEntry.Entries
         }
     }
 
     # 2. Check disk cache
     if (-not $script:CacheFolder) {
-        return $null
+        return
     }
     $cacheFile = Join-Path -Path $script:CacheFolder -ChildPath "$ID.json"
     if (Test-Path -LiteralPath $cacheFile) {
         try {
             $data = Get-Content -LiteralPath $cacheFile -Raw | ConvertFrom-Json
+            if (-not $data.Certificates) {
+                # Written by an older version without card types: look the person up again
+                Write-Verbose "Ignoring cache file '$cacheFile' without card types."
+                return
+            }
             $timestamp = [DateTime]::Parse($data.Timestamp, [System.Globalization.CultureInfo]::InvariantCulture)
             if ((([DateTime]::UtcNow) - $timestamp).TotalHours -lt $script:CacheTTLHours) {
-                $rawList = [System.Collections.Generic.List[byte[]]]::new()
-                foreach ($b64 in $data.Base64Certs) {
-                    $rawList.Add([Convert]::FromBase64String($b64))
-                }
+                $entries = @(foreach ($item in $data.Certificates) {
+                    [pscustomobject]@{ CardType = [string]$item.CardType; CertBytes = [Convert]::FromBase64String($item.Base64) }
+                })
                 $script:MemoryCache[$ID] = @{
-                    Timestamp     = $timestamp
-                    CertBytesList = $rawList.ToArray()
+                    Timestamp = $timestamp
+                    Entries   = $entries
                 }
-                return , $rawList.ToArray()
+                return $entries
             }
         } catch {
             Write-Verbose "Ignoring unreadable cache file '$cacheFile': $($_.Exception.Message)"
         }
     }
-    return $null
+    return
 }
 
 function _setCachedCertificates {
     param(
         [string]$ID,
-        [byte[][]]$CertBytesList
+        [object[]]$Entries
     )
     $now = [DateTime]::UtcNow
     # 1. Store in memory
     $script:MemoryCache[$ID] = @{
-        Timestamp     = $now
-        CertBytesList = $CertBytesList
+        Timestamp = $now
+        Entries   = $Entries
     }
 
     # 2. Store on disk
@@ -101,25 +206,26 @@ function _setCachedCertificates {
             New-Item -ItemType Directory -Path $script:CacheFolder -Force | Out-Null
         }
         $cacheFile = Join-Path -Path $script:CacheFolder -ChildPath "$ID.json"
-        $b64List = [System.Collections.Generic.List[string]]::new()
-        foreach ($bytes in $CertBytesList) {
-            $b64List.Add([Convert]::ToBase64String($bytes))
-        }
         $obj = @{
-            Timestamp   = $now.ToString("o")
-            Base64Certs = $b64List.ToArray()
+            Timestamp    = $now.ToString("o")
+            Certificates = @(foreach ($entry in $Entries) { @{ CardType = $entry.CardType; Base64 = [Convert]::ToBase64String($entry.CertBytes) } })
         }
-        $json = $obj | ConvertTo-Json
+        $json = ConvertTo-Json -InputObject $obj -Depth 3
         Set-Content -LiteralPath $cacheFile -Value $json -Encoding utf8
     } catch {
         Write-Verbose "Could not write the certificate cache for ID '$ID': $($_.Exception.Message)"
     }
 }
 
+# Looks up a person's ID card and Digi-ID authentication certificates. Returns CardType + CertBytes entries.
+#
+# A person has at most one ID card, from SK or from Zetes, and possibly an SK Digi-ID. SK is searched first;
+# once an ID card has been found, Zetes is not searched. A Digi-ID alone does not stop the search, because its
+# owner may have a Zetes ID card. If a directory that has to be searched cannot be reached, the lookup fails
+# as a whole and nothing is cached, so callers never act on a partial answer.
 function _getLdapCertificates {
     [CmdletBinding()]
-    [OutputType([byte[][]])]
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseOutputTypeCorrectly', '', Justification = '"return , $certArray" outputs the byte[][] as one object; the analyzer sees the Object[] wrapper.')]
+    [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory = $true)]
         [string]$ID,
@@ -129,127 +235,66 @@ function _getLdapCertificates {
     )
 
     if ($UseCache) {
-        $cached = _getCachedCertificates -ID $ID
-        if ($cached -and $cached.Count -gt 0) {
-            $problems = @($(foreach ($bytes in $cached) { _getCertificateProblem -CertBytes $bytes -ID $ID }) | Where-Object { $_ })
-            if ($problems.Count -eq 0) {
+        $cached = @(_getCachedCertificates -ID $ID)
+        if ($cached.Count -gt 0) {
+            $problems = @(foreach ($entry in $cached) {
+                if ($script:CardTypes -notcontains $entry.CardType) { "unknown card type '$($entry.CardType)'" }
+                _getCertificateProblem -CertBytes $entry.CertBytes -ID $ID
+            }) | Where-Object { $_ }
+            if (@($problems).Count -eq 0) {
                 Write-Verbose "Retrieved certificate(s) for ID '$ID' from cache."
-                return $cached
+                foreach ($entry in $cached) {
+                    $entry
+                }
+                return
             }
             Write-Warning "Ignoring cached certificate(s) for ID '$ID' and querying LDAP instead: $($problems -join '; ')"
             $script:MemoryCache.Remove($ID)
         }
     }
 
-    $discoveredCerts = [System.Collections.Generic.List[byte[]]]::new()
-    $IDCodeFilter = "(serialNumber=PNOEE-$ID)"
-    $errors = [System.Collections.Generic.List[string]]::new()
+    $found = [System.Collections.Generic.List[object]]::new()
+    foreach ($directory in _getLdapDirectories) {
+        try {
+            $entries = @(_searchLdapDirectory -Server $directory.Server -Port $directory.Port -BaseDN $directory.BaseDN `
+                -AuthenticationType $directory.AuthenticationType -Filter "(serialNumber=PNOEE-$ID)")
+        }
+        catch {
+            Write-Verbose "Could not query $($directory.Name) LDAP ($($directory.Server)): $($_.Exception.Message)"
+            throw "LDAP lookup for ID '$ID' is incomplete: $($directory.Server): $($_.Exception.Message)"
+        }
 
-    # 1. Search SK ID Solutions LDAP (esteid.ldap.sk.ee) - ESTEID2018
-    $skUrl  = $script:EstIDLdapURL
-    $skPort = $script:EstIDLdapPort
-    $skDN   = $script:EstIDLdapDN
-
-    $ldap = $null
-    $ds   = $null
-    try {
-        $ldapdn = "LDAP://$skUrl`:$skPort/$skDN"
-        $auth = [System.DirectoryServices.AuthenticationTypes]::Anonymous
-        $ldap = New-Object System.DirectoryServices.DirectoryEntry($ldapdn, $null, $null, $auth)
-
-        $ds = New-Object System.DirectoryServices.DirectorySearcher($ldap)
-        $ds.Filter = $IDCodeFilter
-        [void]$ds.PropertiesToLoad.Add("usercertificate;binary")
-
-        $searchResults = $ds.FindAll()
-        foreach ($result in $searchResults) {
-            if ($result.Path -like "*ou=Authentication*" -and $result.Path -notlike "*o=Mobile-ID*") {
-                if ($result.Properties['usercertificate;binary'].Count -gt 0) {
-                    $rawVal = $result.Properties['usercertificate;binary'][0]
-                    $byteCert = if ($rawVal -is [byte[]]) {
-                        $rawVal
-                    } else {
-                        [Convert]::FromBase64String($rawVal.ToString())
-                    }
-                    if ($byteCert -and $byteCert.Length -gt 0) {
-                        $discoveredCerts.Add($byteCert)
-                    }
-                }
+        foreach ($entry in $entries) {
+            $cardType = _getCardType -Path $entry.Path -CardTypes $directory.CardTypes
+            if (-not $cardType) {
+                Write-Verbose "Skipping $($directory.Name) entry '$($entry.Path)': not an ID card or Digi-ID authentication certificate."
+                continue
             }
-        }
-    }
-    catch {
-        Write-Verbose "Could not query SK LDAP ($skUrl): $($_.Exception.Message)"
-        $errors.Add("${skUrl}: $($_.Exception.Message)")
-    }
-    finally {
-        if ($ds)   { try { $ds.Dispose() } catch { Write-Verbose "Ignoring error while closing SK LDAP search: $($_.Exception.Message)" } }
-        if ($ldap) { try { $ldap.Dispose() } catch { Write-Verbose "Ignoring error while closing SK LDAP connection: $($_.Exception.Message)" } }
-    }
-
-    # 2. Search Thales / Zetes LDAP (ldap.eidpki.ee) - ESTEID2025
-    $thalesUrl  = $script:ThalesLdapURL
-    $thalesPort = $script:ThalesLdapPort
-    $thalesDN   = $script:ThalesLdapDN
-
-    $thalesLdap = $null
-    $thalesDs   = $null
-    try {
-        $thalesLdapDn = "LDAP://$thalesUrl`:$thalesPort/$thalesDN"
-        # FastBind required to avoid 0x80005000 schema discovery errors on Zetes
-        $thalesAuth = [System.DirectoryServices.AuthenticationTypes]::FastBind
-        $thalesLdap = New-Object System.DirectoryServices.DirectoryEntry($thalesLdapDn, $null, $null, $thalesAuth)
-
-        $thalesDs = New-Object System.DirectoryServices.DirectorySearcher($thalesLdap)
-        $thalesDs.Filter = $IDCodeFilter
-        [void]$thalesDs.PropertiesToLoad.Add("usercertificate;binary")
-
-        $thalesResults = $thalesDs.FindAll()
-        foreach ($result in $thalesResults) {
-            if ($result.Path -like "*ou=Authentication*") {
-                if ($result.Properties['usercertificate;binary'].Count -gt 0) {
-                    $rawVal = $result.Properties['usercertificate;binary'][0]
-                    $byteCert = if ($rawVal -is [byte[]]) {
-                        $rawVal
-                    } else {
-                        [Convert]::FromBase64String($rawVal.ToString())
-                    }
-                    if ($byteCert -and $byteCert.Length -gt 0) {
-                        $discoveredCerts.Add($byteCert)
-                    }
-                }
+            try {
+                [byte[]]$bytes = if ($entry.Value -is [byte[]]) { $entry.Value } else { [Convert]::FromBase64String($entry.Value.ToString()) }
             }
+            catch {
+                Write-Verbose "Skipping $($directory.Name) entry '$($entry.Path)': unreadable certificate value."
+                continue
+            }
+            $problem = _getCertificateProblem -CertBytes $bytes -ID $ID
+            if ($problem) {
+                Write-Verbose "Skipping $($directory.Name) certificate for ID '$ID': $problem"
+                continue
+            }
+            $found.Add([pscustomobject]@{ CardType = $cardType; CertBytes = $bytes })
         }
-    }
-    catch {
-        Write-Verbose "Could not query Thales/Zetes LDAP ($thalesUrl): $($_.Exception.Message)"
-        $errors.Add("${thalesUrl}: $($_.Exception.Message)")
-    }
-    finally {
-        if ($thalesDs)   { try { $thalesDs.Dispose() } catch { Write-Verbose "Ignoring error while closing Zetes LDAP search: $($_.Exception.Message)" } }
-        if ($thalesLdap) { try { $thalesLdap.Dispose() } catch { Write-Verbose "Ignoring error while closing Zetes LDAP connection: $($_.Exception.Message)" } }
-    }
 
-    if ($errors.Count -gt 0) {
-        $errSummary = $errors -join "; "
-        throw "LDAP lookup for ID '$ID' is incomplete: $errSummary"
-    }
-
-    $validCerts = [System.Collections.Generic.List[byte[]]]::new()
-    foreach ($bytes in $discoveredCerts) {
-        $problem = _getCertificateProblem -CertBytes $bytes -ID $ID
-        if ($problem) {
-            Write-Verbose "Skipping LDAP certificate for ID '$ID': $problem"
-        }
-        else {
-            $validCerts.Add($bytes)
+        if (@($found | Where-Object { $_.CardType -eq 'IdCard' }).Count -gt 0) {
+            Write-Verbose "ID card found in $($directory.Name) LDAP; no further directories searched."
+            break
         }
     }
 
-    $certArray = $validCerts.ToArray()
-    if ($UseCache -and $certArray.Count -gt 0) {
-        _setCachedCertificates -ID $ID -CertBytesList $certArray
+    if ($UseCache -and $found.Count -gt 0) {
+        _setCachedCertificates -ID $ID -Entries $found.ToArray()
     }
-
-    return , $certArray
+    foreach ($item in $found) {
+        $item
+    }
 }
