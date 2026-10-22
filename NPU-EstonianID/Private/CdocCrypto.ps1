@@ -207,9 +207,16 @@ public static class CdocCryptoEngine {
         public byte[] EphemeralPublicKeyDer; // 97 bytes (0x04 || X || Y)
     }
 
+    // DER-encoded curve OID 1.3.132.0.34 (secp384r1 / NIST P-384)
+    private static readonly byte[] P384CurveOid = { 0x06, 0x05, 0x2B, 0x81, 0x04, 0x00, 0x22 };
+
     public static EcdhAgreementResult PerformEcdhAgreement(X509Certificate2 recipientCert) {
         byte[] rawPubKey = recipientCert.PublicKey.EncodedKeyValue.RawData;
-        if (rawPubKey.Length != 97 || rawPubKey[0] != 0x04) {
+        // Other 384-bit curves (e.g. brainpoolP384r1) also have 97-byte points, so check the curve itself
+        byte[] curve = recipientCert.PublicKey.EncodedParameters.RawData;
+        bool isP384 = recipientCert.PublicKey.Oid.Value == "1.2.840.10045.2.1" && curve.Length == P384CurveOid.Length;
+        for (int i = 0; isP384 && i < curve.Length; i++) isP384 = curve[i] == P384CurveOid[i];
+        if (!isP384 || rawPubKey.Length != 97 || rawPubKey[0] != 0x04) {
             throw new NotSupportedException("Recipient certificate does not contain an uncompressed NIST P-384 public key");
         }
 

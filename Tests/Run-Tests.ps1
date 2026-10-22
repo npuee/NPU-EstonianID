@@ -8,7 +8,7 @@ Write-Host "Running NPU-EstonianID Test Suite on PS Version $($PSVersionTable.PS
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 $modulePath = Resolve-Path (Join-Path -Path $PSScriptRoot -ChildPath '..\NPU-EstonianID\NPU-EstonianID.psd1')
-Write-Host "[1/10] Importing Module from: $modulePath"
+Write-Host "[1/11] Importing Module from: $modulePath"
 Import-Module $modulePath -Force
 
 # Verify exported commands
@@ -22,7 +22,7 @@ if (-not ($exported.Name -contains 'Get-EstEIDCertificate')) {
 }
 
 # 2. Test Soft ActiveDirectory check
-Write-Host "`n[2/10] Testing Soft Active Directory dependency check..."
+Write-Host "`n[2/11] Testing Soft Active Directory dependency check..."
 try {
     Get-ADUserEstonianIDMapping -Identity "testuser" -ErrorAction Stop
     Write-Warning "ActiveDirectory module is present on this system."
@@ -37,7 +37,7 @@ catch {
 }
 
 # 3. Load Test Certificates
-Write-Host "`n[3/10] Loading Test Certificates (2018 SK and 2025 Zetes)..."
+Write-Host "`n[3/11] Loading Test Certificates (2018 SK and 2025 Zetes)..."
 $cert2018Path = Join-Path -Path $PSScriptRoot -ChildPath 'cert_esteid2018_test.cer'
 $cert2025Path = Join-Path -Path $PSScriptRoot -ChildPath 'cert_esteid2025_test.cer'
 
@@ -56,7 +56,7 @@ if ([string]::IsNullOrWhiteSpace($name2025)) {
 Write-Host " PASS: SimpleName correctly extracted for both card generations." -ForegroundColor Green
 
 # 4. Test Strong Name Mapping string generation
-Write-Host "`n[4/10] Testing Strong Name Mapping Generation (Get-IDUserMapping)..."
+Write-Host "`n[4/11] Testing Strong Name Mapping Generation (Get-IDUserMapping)..."
 $mapping2018 = Get-IDUserMapping -Certificate $cert2018
 $mapping2025 = Get-IDUserMapping -Certificate $cert2025
 Write-Host " 2018 Mapping: $mapping2018"
@@ -71,7 +71,7 @@ if (-not $mapping2025.StartsWith("X509:<I>") -or -not $mapping2025.Contains("<SR
 Write-Host " PASS: Strong name mapping strings generated successfully." -ForegroundColor Green
 
 # 5. Test CDOC 1.0 Encryption for 2025 Zetes Card
-Write-Host "`n[5/10] Testing CDOC Encryption with 2025 Zetes Card (Native PS & bcrypt.dll)..."
+Write-Host "`n[5/11] Testing CDOC Encryption with 2025 Zetes Card (Native PS & bcrypt.dll)..."
 $testPlaintext = "Hello Estonian ID! This is a confidential test encrypted with pure native PowerShell."
 $testFile = Join-Path -Path $env:TEMP -ChildPath "npu_test_doc.txt"
 [System.IO.File]::WriteAllText($testFile, $testPlaintext)
@@ -93,7 +93,7 @@ if ($encKey.Recipient -ne $name2025) {
 Write-Host " PASS: Recipient attribute is non-empty and matches '$name2025' perfectly!" -ForegroundColor Green
 
 # 6. Test Multi-Recipient Encryption (2018 + 2025 cards)
-Write-Host "`n[6/10] Testing Multi-Recipient Encryption (2018 + 2025 simultaneously)..."
+Write-Host "`n[6/11] Testing Multi-Recipient Encryption (2018 + 2025 simultaneously)..."
 $testCdocMulti = Join-Path -Path $env:TEMP -ChildPath "npu_test_multi.cdoc"
 if (Test-Path $testCdocMulti) { Remove-Item $testCdocMulti -Force }
 
@@ -109,7 +109,7 @@ Write-Host " Recipient 2: $($encKeys[1].Recipient)"
 Write-Host " PASS: Multi-recipient CDOC container generated with 2 keys." -ForegroundColor Green
 
 # 7. Test In-Memory String Encryption
-Write-Host "`n[7/10] Testing In-Memory String Encryption (-InputString)..."
+Write-Host "`n[7/11] Testing In-Memory String Encryption (-InputString)..."
 $testCdocString = Join-Path -Path $env:TEMP -ChildPath "npu_test_string.cdoc"
 if (Test-Path $testCdocString) { Remove-Item $testCdocString -Force }
 
@@ -155,8 +155,8 @@ finally {
 Write-Host " PASS: Piped lines encrypted as a single 'pipe.txt' inside 'pipe.cdoc'." -ForegroundColor Green
 
 # 8. Test Incomplete LDAP Directory Outage Handling
-Write-Host "`n[8/10] Testing Incomplete LDAP Outage Handling (Failure Isolation & Zero Caching)..."
-$v2CacheDir = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath 'NPU_EstID_Cache_v2'
+Write-Host "`n[8/11] Testing Incomplete LDAP Outage Handling (Failure Isolation & Zero Caching)..."
+$v2CacheDir = & (Get-Module NPU-EstonianID) { $script:CacheFolder }
 $fakeID = '00000000000'
 $fakeCacheFile = Join-Path -Path $v2CacheDir -ChildPath "$fakeID.json"
 if (Test-Path -LiteralPath $fakeCacheFile) {
@@ -273,7 +273,7 @@ finally {
 }
 
 # 9. Decryption Round-Trip Test (End-to-End Key Unwrap + AES-GCM Decrypt)
-Write-Host "`n[9/10] Testing Full Decryption Round-Trip (ECDH + Key Unwrap + AES-GCM Decrypt)..."
+Write-Host "`n[9/11] Testing Full Decryption Round-Trip (ECDH + Key Unwrap + AES-GCM Decrypt)..."
 if ($PSVersionTable.PSVersion.Major -ge 7) {
     if (-not ([System.Management.Automation.PSTypeName]'KwUnwrap').Type) {
         Add-Type -TypeDefinition @"
@@ -344,14 +344,16 @@ else {
 }
 
 # 10. OU batch reports Set-ADUser failures (fake ActiveDirectory module, cached certificate, no network)
-Write-Host "`n[10/10] Testing Set-ADOUEstonianIDMapping failure reporting (mock Active Directory)..."
+Write-Host "`n[10/11] Testing Set-ADOUEstonianIDMapping failure reporting (mock Active Directory)..."
 if (Get-Module -ListAvailable -Name ActiveDirectory) {
     Write-Host " SKIP: real ActiveDirectory module is installed; not shadowing it with a mock" -ForegroundColor Yellow
 }
 else {
-    $adTestId = '00000000002'
-    $adCacheDir = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath 'NPU_EstID_Cache_v2'
+    # Cached certificates must belong to the personal code, so use the one in the 2025 test certificate
+    $adTestId = '60001019906'
+    $adCacheDir = & (Get-Module NPU-EstonianID) { $script:CacheFolder }
     $adCacheFile = Join-Path -Path $adCacheDir -ChildPath "$adTestId.json"
+    $adCacheBackup = if (Test-Path -LiteralPath $adCacheFile) { Get-Content -LiteralPath $adCacheFile -Raw }
     try {
         # Seed the disk cache so the lookup never touches LDAP; point LDAP at a closed port so any hit fails loudly
         $null = New-Item -ItemType Directory -Path $adCacheDir -Force
@@ -366,8 +368,8 @@ else {
             function Get-ADUser {
                 param($Filter, $SearchBase, $Properties, $Identity)
                 $all = @(
-                    [PSCustomObject]@{ SamAccountName = 'ok.user';   isikukood = '00000000002'; altSecurityIdentities = @() }
-                    [PSCustomObject]@{ SamAccountName = 'fail.user'; isikukood = '00000000002'; altSecurityIdentities = @() }
+                    [PSCustomObject]@{ SamAccountName = 'ok.user';   isikukood = '60001019906'; altSecurityIdentities = @() }
+                    [PSCustomObject]@{ SamAccountName = 'fail.user'; isikukood = '60001019906'; altSecurityIdentities = @() }
                 )
                 if ($Identity) { $all | Where-Object { $_.SamAccountName -eq $Identity } } else { $all }
             }
@@ -412,12 +414,75 @@ else {
     }
     finally {
         Remove-Module -Name ActiveDirectory -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $adCacheFile -ErrorAction SilentlyContinue
+        if ($adCacheBackup) {
+            Set-Content -LiteralPath $adCacheFile -Value $adCacheBackup -Encoding utf8 -NoNewline
+        }
+        else {
+            Remove-Item -LiteralPath $adCacheFile -ErrorAction SilentlyContinue
+        }
         'EstIDLdapURL', 'EstIDLdapPort', 'ThalesLdapURL', 'ThalesLdapPort' | ForEach-Object {
             Remove-Variable -Name $_ -Scope Global -ErrorAction SilentlyContinue
         }
     }
 }
+
+# 11. Recipient certificate validation (cache contents, validity period, curve)
+Write-Host "`n[11/11] Testing recipient certificate validation..."
+$poisonId = '00000000003'
+$poisonFile = Join-Path -Path (& (Get-Module NPU-EstonianID) { $script:CacheFolder }) -ChildPath "$poisonId.json"
+try {
+    # A cache entry holding someone else's certificate must be ignored, not used for encryption
+    $null = New-Item -ItemType Directory -Path (Split-Path -Path $poisonFile) -Force
+    @{
+        Timestamp   = [DateTime]::UtcNow.ToString('o')
+        Base64Certs = @([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($cert2025Path)))
+    } | ConvertTo-Json | Set-Content -LiteralPath $poisonFile -Encoding utf8
+    $global:EstIDLdapURL = '127.0.0.1'; $global:EstIDLdapPort = 1
+    $global:ThalesLdapURL = '127.0.0.1'; $global:ThalesLdapPort = 1
+
+    $wv = $null
+    $poisonCerts = @(Get-EstEIDCertificate -ID $poisonId -UseCache -ErrorAction SilentlyContinue -WarningAction SilentlyContinue -WarningVariable wv)
+    if ($poisonCerts.Count -ne 0) {
+        throw "A cached certificate of another person was returned for ID '$poisonId'"
+    }
+    if (-not @($wv | Where-Object { "$_" -match "Ignoring cached certificate.*PNOEE-$poisonId" })) {
+        throw "Expected a warning about the ignored cache entry, got: $($wv -join '; ')"
+    }
+    Write-Host " PASS: Cache entry holding another person's certificate was ignored." -ForegroundColor Green
+}
+finally {
+    Remove-Item -LiteralPath $poisonFile -ErrorAction SilentlyContinue
+    'EstIDLdapURL', 'EstIDLdapPort', 'ThalesLdapURL', 'ThalesLdapPort' | ForEach-Object {
+        Remove-Variable -Name $_ -Scope Global -ErrorAction SilentlyContinue
+    }
+}
+
+$sha384 = [System.Security.Cryptography.HashAlgorithmName]::SHA384
+$expiredCert = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=Expired',
+    [System.Security.Cryptography.ECDsa]::Create([System.Security.Cryptography.ECCurve]::CreateFromFriendlyName('nistP384')), $sha384
+).CreateSelfSigned([DateTimeOffset]::Now.AddDays(-10), [DateTimeOffset]::Now.AddDays(-1))
+$p256Cert = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=P256',
+    [System.Security.Cryptography.ECDsa]::Create([System.Security.Cryptography.ECCurve]::CreateFromFriendlyName('nistP256')), $sha384
+).CreateSelfSigned([DateTimeOffset]::Now.AddDays(-1), [DateTimeOffset]::Now.AddDays(1))
+
+$rejectOut = Join-Path -Path $env:TEMP -ChildPath 'npu_test_reject.cdoc'
+foreach ($case in @{ Cert = $expiredCert; Expect = 'only valid from' }, @{ Cert = $p256Cert; Expect = 'NIST P-384' }) {
+    if (Test-Path -LiteralPath $rejectOut) { Remove-Item -LiteralPath $rejectOut -Force }
+    $rejectMsg = $null
+    try {
+        Protect-Cdoc -InputString 'x' -Out $rejectOut -Certificate $case.Cert -ErrorAction Stop
+    }
+    catch {
+        $rejectMsg = $_.Exception.Message
+    }
+    if ($rejectMsg -notmatch $case.Expect) {
+        throw "Expected Protect-Cdoc to reject '$($case.Cert.Subject)' with '$($case.Expect)', got: '$rejectMsg'"
+    }
+    if (Test-Path -LiteralPath $rejectOut) {
+        throw "Output file was created for rejected certificate '$($case.Cert.Subject)'"
+    }
+}
+Write-Host " PASS: Expired and non-P-384 recipient certificates are rejected." -ForegroundColor Green
 
 Write-Host "`n==========================================================" -ForegroundColor Green
 Write-Host " ALL TESTS PASSED SUCCESSFULLY!" -ForegroundColor Green

@@ -2,20 +2,19 @@
 
 Unified PowerShell module for **Estonian ID Card (EstEID)** Active Directory Smart Card authentication management and **pure-native CDOC 1.0 container encryption**.
 
-Built for vanilla **Windows PowerShell 5.1** and **PowerShell 7+** with zero external binaries, zero C++ toolchains, and zero disk certificate leaks.
+Built for vanilla **Windows PowerShell 5.1** and **PowerShell 7+** with no external binaries or C++ toolchain.
 
 ---
 
 ## Highlights
 
 - **Pure Native Cryptography:** Eliminates the ~12 MB C++ `cdoc-tool.exe` binary and OpenSSL/libxml2 dependencies. Uses Windows CNG (`bcrypt.dll`) and .NET cryptographic primitives natively supported on all modern Windows installations.
-- **Microscopic Footprint:** Reduced module size from **12 MB to ~57 KB** (99.5% reduction).
-- **Zero Disk Leakage:** All certificate resolution, ECDH key agreements, and AES encryption happen strictly in-memory. Plaintext temporary files and `.cer` files are never written to disk.
+- **No Plaintext Temporary Files:** Key agreement and AES encryption happen in memory; only the finished encrypted container is written to disk. The certificate cache (below) does store public certificates on disk.
 - **Card Generation Agnostic:** Tested and verified with both **2018 SK ID Solutions** cards (ECC NIST P-384, ESTEID2018) and **2025 Zetes** cards (ECC NIST P-384, ESTEID2025). Resolves the upstream OpenSSL RDN index bug on 2025 cards.
 - **Cross-Edition Compatibility:** Works seamlessly out-of-the-box on default Windows 10/11 Windows PowerShell 5.1 (`Desktop`) and modern PowerShell 7+ (`Core`).
 - **Soft Active Directory Dependency:** Encryption and LDAP certificate lookups can be run on any standalone machine or workstation. Active Directory cmdlets only require RSAT when explicitly called.
 - **Fail-Safe LDAP Resolution:** Queries both SK ID Solutions (`esteid.ldap.sk.ee:636`) and Zetes (`ldap.eidpki.ee:636`). If any directory is unreachable, lookups fail loudly instead of returning partial results, preventing accidental deletion of valid logon mappings or incomplete encryption.
-- **Dual-Tier LDAP Caching (v2):** 24-hour in-memory and disk cache (`NPU_EstID_Cache_v2`) to stay safely below Zetes rate limits (60 req/hr), caching only complete query results.
+- **Dual-Tier LDAP Caching (v2):** 24-hour in-memory and disk cache (`%LOCALAPPDATA%\NPU-EstonianID\CertCache`) to stay safely below Zetes rate limits (60 req/hr), caching only complete query results. Certificates from the cache and from LDAP are only used if they are currently valid and their subject is `PNOEE-<personal code>`.
 
 ---
 
@@ -115,11 +114,11 @@ Generate the strong certificate mapping string:
 
 ```powershell
 Get-IDUserMapping -EstonianID 38001085718
-# Output:
-# X509:<I>C=EE,O=SK ID Solutions AS,OID.2.5.4.97=NTREE-10747013,CN=ESTEID2018<SR>57F0E86E4A23C0229B563B6B06DC973A
+# Output (issuer in reversed RDN order, certificate serial number as byte-reversed hex):
+# X509:<I>C=EE,O=SK ID Solutions AS,OID.2.5.4.97=NTREE-10747013,CN=ESTEID2018<SR><reversed serial number>
 ```
 
-Set Smart Card mapping on an Active Directory user account:
+Set Smart Card mapping on an Active Directory user account (by default missing mappings are added; `-Replace` overwrites the **whole** `altSecurityIdentities` attribute, including mappings for other smart cards):
 
 ```powershell
 Set-ADUserEstonianIDMapping -Identity "jjoeorg" -EstonianID "60001019906"
@@ -143,6 +142,16 @@ Emitted output includes `Account`, `NationalID`, `MappingExists`, `CanBeReplaced
 - **Key Derivation:** ConcatKDF with SHA-384 (NIST SP 800-56A / ANSI X9.63)
 - **Key Wrap:** RFC 3394 AES Key Wrap (256-bit KEK wrapping 256-bit transport key -> 40 bytes)
 - **Active Directory Mapping:** `X509:<I>...<SR>...` with reverse-ordered RDN and hex serial number complying with Microsoft KB5014754 strong mapping requirements.
+
+---
+
+## Limitations
+
+- **CDOC 1.0 metadata is not encrypted.** The container shows the original file name and size, and each recipient's name and personal code (the `Recipient` attribute and the embedded certificate), to anyone who has the file. DigiDoc4 has created CDOC 2.0 by default since autumn 2026; CDOC 1.0 encryption is supported only temporarily, and no end date has been announced for CDOC 1.0 decryption.
+- **Files are encrypted in memory.** The whole file and several encoded copies of it are held in memory at once, so files larger than a few hundred MB may fail.
+- **Existing output files are overwritten** without a prompt.
+- **`Protect-Cdoc` uses the certificate cache by default**; pass `-NoCache` to always query LDAP. The cache files are named after the personal codes looked up and are not cleaned up automatically.
+- **Certificates are not chain-validated.** Certificates from LDAP and the cache are checked for the personal code and validity period, not against the ESTEID2018/ESTEID2025 issuing CAs.
 
 ---
 

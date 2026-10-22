@@ -11,9 +11,35 @@ $script:ThalesLdapPort = 636
 $script:ThalesLdapDN = "dc=ldap,dc=eidpki,dc=ee"
 
 # Caching Configuration (Protects against Zetes 60 req/hr rate limits)
-$script:CacheFolder = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath 'NPU_EstID_Cache_v2'
+# Kept in the user profile, not %TEMP%: whoever can write the cache decides who Protect-Cdoc encrypts to,
+# and for SYSTEM %TEMP% is C:\Windows\Temp, which every local user can write to.
+$localAppData = [Environment]::GetFolderPath('LocalApplicationData')
+$script:CacheFolder = if ($localAppData) { Join-Path -Path $localAppData -ChildPath 'NPU-EstonianID\CertCache' } else { $null }
 $script:CacheTTLHours = 24
 $script:MemoryCache = @{}
+
+# Returns $null if the certificate is currently valid and issued to the personal code, otherwise the reason it is not.
+function _Get-EstEIDCertificateProblem {
+    param(
+        [byte[]]$CertBytes,
+        [string]$ID
+    )
+
+    try {
+        $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($CertBytes)
+    }
+    catch {
+        return "not a parseable certificate: $($_.Exception.Message)"
+    }
+    if ($cert.Subject -notmatch "(^|,\s*)SERIALNUMBER=PNOEE-$ID(\s*,|$)") {
+        return "subject '$($cert.Subject)' does not belong to PNOEE-$ID"
+    }
+    $now = [DateTime]::Now
+    if ($cert.NotBefore -gt $now -or $cert.NotAfter -lt $now) {
+        return "certificate '$($cert.Subject)' is only valid from $($cert.NotBefore) to $($cert.NotAfter)"
+    }
+    return $null
+}
 
 function Get-CachedCertificates {
     param([string]$ID)
@@ -27,6 +53,9 @@ function Get-CachedCertificates {
     }
 
     # 2. Check disk cache
+    if (-not $script:CacheFolder) {
+        return $null
+    }
     $cacheFile = Join-Path -Path $script:CacheFolder -ChildPath "$ID.json"
     if (Test-Path -LiteralPath $cacheFile) {
         try {
@@ -61,6 +90,9 @@ function Set-CachedCertificates {
     }
 
     # 2. Store on disk
+    if (-not $script:CacheFolder) {
+        return
+    }
     try {
         if (-not (Test-Path -LiteralPath $script:CacheFolder)) {
             New-Item -ItemType Directory -Path $script:CacheFolder -Force | Out-Null
@@ -92,8 +124,13 @@ function Get-LdapCertificatesInternal {
     if ($UseCache) {
         $cached = Get-CachedCertificates -ID $ID
         if ($cached -and $cached.Count -gt 0) {
-            Write-Verbose "Retrieved certificate(s) for ID '$ID' from cache."
-            return $cached
+            $problems = @($(foreach ($bytes in $cached) { _Get-EstEIDCertificateProblem -CertBytes $bytes -ID $ID }) | Where-Object { $_ })
+            if ($problems.Count -eq 0) {
+                Write-Verbose "Retrieved certificate(s) for ID '$ID' from cache."
+                return $cached
+            }
+            Write-Warning "Ignoring cached certificate(s) for ID '$ID' and querying LDAP instead: $($problems -join '; ')"
+            $script:MemoryCache.Remove($ID)
         }
     }
 
@@ -191,7 +228,18 @@ function Get-LdapCertificatesInternal {
         throw "LDAP lookup for ID '$ID' is incomplete: $errSummary"
     }
 
-    $certArray = $discoveredCerts.ToArray()
+    $validCerts = [System.Collections.Generic.List[byte[]]]::new()
+    foreach ($bytes in $discoveredCerts) {
+        $problem = _Get-EstEIDCertificateProblem -CertBytes $bytes -ID $ID
+        if ($problem) {
+            Write-Verbose "Skipping LDAP certificate for ID '$ID': $problem"
+        }
+        else {
+            $validCerts.Add($bytes)
+        }
+    }
+
+    $certArray = $validCerts.ToArray()
     if ($UseCache -and $certArray.Count -gt 0) {
         Set-CachedCertificates -ID $ID -CertBytesList $certArray
     }

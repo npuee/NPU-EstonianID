@@ -203,6 +203,13 @@ function _Protect-CdocItem {
         throw "No valid recipient certificates could be resolved."
     }
 
+    $now = [DateTime]::Now
+    foreach ($c in $uniqueCerts) {
+        if ($c.NotBefore -gt $now -or $c.NotAfter -lt $now) {
+            throw "Recipient certificate '$($c.Subject)' is only valid from $($c.NotBefore) to $($c.NotAfter); the recipient could not decrypt with it."
+        }
+    }
+
     # 4. Generate random 256-bit transport key and 96-bit IV
     $transportKey = [CdocCryptoEngine]::GenerateRandomBytes(32)
     $iv = [CdocCryptoEngine]::GenerateRandomBytes(12)
