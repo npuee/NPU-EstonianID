@@ -484,6 +484,43 @@ foreach ($case in @{ Cert = $expiredCert; Expect = 'only valid from' }, @{ Cert 
 }
 Write-Host " PASS: Expired and non-P-384 recipient certificates are rejected." -ForegroundColor Green
 
+# Get-EstEIDCertificate -OutFolder saves certificates to files (cached certificate, no network)
+$saveId = '60001019906'
+$saveCacheFile = Join-Path -Path (& (Get-Module NPU-EstonianID) { $script:CacheFolder }) -ChildPath "$saveId.json"
+$saveCacheBackup = if (Test-Path -LiteralPath $saveCacheFile) { Get-Content -LiteralPath $saveCacheFile -Raw }
+$saveDir = Join-Path -Path $env:TEMP -ChildPath ("npu_test_save_" + [guid]::NewGuid().ToString('N'))
+try {
+    @{
+        Timestamp   = [DateTime]::UtcNow.ToString('o')
+        Base64Certs = @([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($cert2025Path)))
+    } | ConvertTo-Json | Set-Content -LiteralPath $saveCacheFile -Encoding utf8
+    $global:EstIDLdapURL = '127.0.0.1'; $global:EstIDLdapPort = 1
+    $global:ThalesLdapURL = '127.0.0.1'; $global:ThalesLdapPort = 1
+
+    $saved = @(Get-EstEIDCertificate -ID $saveId -UseCache -OutFolder $saveDir -ErrorAction Stop)
+    $expectedFile = Join-Path -Path $saveDir -ChildPath "cert_${saveId}_$($cert2025.SerialNumber).cer"
+    if ($saved.Count -ne 1 -or $saved[0] -isnot [System.IO.FileInfo] -or $saved[0].FullName -ne $expectedFile) {
+        throw "Expected one FileInfo for '$expectedFile', got: $($saved | Out-String)"
+    }
+    $savedCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($expectedFile)
+    if ($savedCert.Thumbprint -ne $cert2025.Thumbprint) {
+        throw "Saved certificate does not match the cached one"
+    }
+    Write-Host " PASS: Get-EstEIDCertificate -OutFolder saved the certificate as '$($saved[0].Name)'." -ForegroundColor Green
+}
+finally {
+    if ($saveCacheBackup) {
+        Set-Content -LiteralPath $saveCacheFile -Value $saveCacheBackup -Encoding utf8 -NoNewline
+    }
+    else {
+        Remove-Item -LiteralPath $saveCacheFile -ErrorAction SilentlyContinue
+    }
+    Remove-Item -LiteralPath $saveDir -Recurse -Force -ErrorAction SilentlyContinue
+    'EstIDLdapURL', 'EstIDLdapPort', 'ThalesLdapURL', 'ThalesLdapPort' | ForEach-Object {
+        Remove-Variable -Name $_ -Scope Global -ErrorAction SilentlyContinue
+    }
+}
+
 Write-Host "`n==========================================================" -ForegroundColor Green
 Write-Host " ALL TESTS PASSED SUCCESSFULLY!" -ForegroundColor Green
 Write-Host "==========================================================" -ForegroundColor Green

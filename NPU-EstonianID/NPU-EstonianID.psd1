@@ -1,7 +1,7 @@
 @{
     RootModule = 'NPU-EstonianID.psm1'
-    ModuleVersion = '1.0.0'
-    GUID = '9f8e7d6c-5b4a-4321-b0e1-0123456789ab'
+    ModuleVersion = '1.1.0'
+    GUID = '5699d10f-3195-4da4-9239-704ff0e42bbb'
     Author = 'NPU'
     CompanyName = 'NPU'
     Copyright = '(c) NPU. Licensed under the Apache License 2.0.'

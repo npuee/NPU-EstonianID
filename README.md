@@ -41,7 +41,7 @@ Import-Module NPU-EstonianID
 | Cmdlet | Description |
 | :--- | :--- |
 | `Protect-Cdoc` | Encrypts files or in-memory strings into standard CDOC 1.0 (`ENCDOC-XML\|1.1`) containers decryptable by DigiDoc4. |
-| `Get-EstEIDCertificate` | Resolves authentication certificates for 11-digit personal codes from SK or Zetes LDAP directories. |
+| `Get-EstEIDCertificate` | Resolves authentication certificates for 11-digit personal codes from SK or Zetes LDAP directories, optionally saving them as `.cer` files. |
 | `Get-IDUserMapping` | Formats certificates or personal codes into Active Directory `X509:<I>...<SR>...` strong name mapping strings. |
 | `Get-ADUserEstonianIDMapping` | Reads the current Estonian ID card mappings configured on an Active Directory user account. |
 | `Set-ADUserEstonianIDMapping` | Configures an AD user's `altSecurityIdentities` with strong name mappings, with write-suppression if already matching. |
@@ -106,6 +106,9 @@ $cert = Get-EstEIDCertificate -PersonalCode 60001019906
 $cert.Subject
 $cert.Thumbprint
 $cert.NotAfter
+
+# Save the certificate(s) as cert_<ID>_<SerialNumber>.cer files; returns the saved files
+Get-EstEIDCertificate -PersonalCode 60001019906 -OutFolder C:\Certs
 ```
 
 ### 4. Active Directory Smart Card Logon Mappings

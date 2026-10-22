@@ -17,6 +17,10 @@ function Get-EstEIDCertificate {
     .PARAMETER Raw
     Returns raw certificate bytes ([byte[]]) instead of X509Certificate2 objects.
 
+    .PARAMETER OutFolder
+    Saves each certificate as a DER-encoded 'cert_<ID>_<SerialNumber>.cer' file in this folder (created if missing)
+    and returns the FileInfo objects of the saved files instead of certificate objects.
+
     .EXAMPLE
     Get-EstEIDCertificate -ID '38001085718'
 
@@ -27,8 +31,12 @@ function Get-EstEIDCertificate {
     .EXAMPLE
     # Pipeline query
     '38001085718', '60001019906' | Get-EstEIDCertificate
+
+    .EXAMPLE
+    # Save the certificates to files
+    Get-EstEIDCertificate -ID '38001085718' -OutFolder C:\Certs
     #>
-    [CmdletBinding()]
+    [CmdletBinding(DefaultParameterSetName = 'Object')]
     param(
         [Parameter(Mandatory = $true, ValueFromPipeline = $true, Position = 0)]
         [ValidatePattern('^\d{11}$')]
@@ -38,8 +46,11 @@ function Get-EstEIDCertificate {
         [Parameter()]
         [switch]$UseCache,
 
-        [Parameter()]
-        [switch]$Raw
+        [Parameter(ParameterSetName = 'Raw')]
+        [switch]$Raw,
+
+        [Parameter(Mandatory = $true, ParameterSetName = 'Save')]
+        [string]$OutFolder
     )
 
     process {
@@ -83,10 +94,22 @@ function Get-EstEIDCertificate {
             else {
                 try {
                     $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($bytes)
-                    Write-Output $cert
                 }
                 catch {
                     Write-Warning "Failed to parse certificate bytes for ID '$ID': $($_.Exception.Message)"
+                    continue
+                }
+                if ($PSCmdlet.ParameterSetName -eq 'Save') {
+                    $folder = $PSCmdlet.GetUnresolvedProviderPathFromPSPath($OutFolder)
+                    if (-not (Test-Path -LiteralPath $folder -PathType Container)) {
+                        $null = New-Item -ItemType Directory -Path $folder -Force
+                    }
+                    $certFile = Join-Path -Path $folder -ChildPath "cert_${ID}_$($cert.SerialNumber).cer"
+                    [System.IO.File]::WriteAllBytes($certFile, $cert.RawData)
+                    Get-Item -LiteralPath $certFile
+                }
+                else {
+                    Write-Output $cert
                 }
             }
         }
