@@ -20,7 +20,8 @@ function Set-ADUserEstonianIDMapping {
     If specified, replaces existing altSecurityIdentities with resolved mappings. By default, new mappings are added.
 
     .PARAMETER Force
-    Forces writing to Active Directory even if existing altSecurityIdentities already match.
+    With -Replace, forces writing to Active Directory even if existing altSecurityIdentities already match.
+    Has no effect without -Replace, since only missing mappings are ever added.
 
     .PARAMETER UseCache
     Enables local caching to avoid LDAP rate limits during bulk queries.
@@ -113,7 +114,13 @@ function Set-ADUserEstonianIDMapping {
 
             $actionDesc = "Replace altSecurityIdentities with $($mappings.Count) mapping(s)"
             if ($PSCmdlet.ShouldProcess("ADUser: $Identity", $actionDesc)) {
-                Set-ADUser -Identity $Identity -Replace @{ altSecurityIdentities = [string[]]$mappings }
+                try {
+                    Set-ADUser -Identity $user -Replace @{ altSecurityIdentities = [string[]]$mappings } -ErrorAction Stop
+                }
+                catch {
+                    Write-Error "Failed to update altSecurityIdentities; user '$Identity' was NOT modified: $($_.Exception.Message)"
+                    return
+                }
                 Write-Verbose "Successfully replaced altSecurityIdentities for user '$Identity'."
             }
         }
@@ -127,7 +134,13 @@ function Set-ADUserEstonianIDMapping {
 
             $actionDesc = "Add $($toAdd.Count) mapping(s) to altSecurityIdentities"
             if ($PSCmdlet.ShouldProcess("ADUser: $Identity", $actionDesc)) {
-                Set-ADUser -Identity $Identity -Add @{ altSecurityIdentities = [string[]]$toAdd }
+                try {
+                    Set-ADUser -Identity $user -Add @{ altSecurityIdentities = [string[]]$toAdd } -ErrorAction Stop
+                }
+                catch {
+                    Write-Error "Failed to update altSecurityIdentities; user '$Identity' was NOT modified: $($_.Exception.Message)"
+                    return
+                }
                 Write-Verbose "Successfully added $($toAdd.Count) mapping(s) to altSecurityIdentities for user '$Identity'."
             }
         }

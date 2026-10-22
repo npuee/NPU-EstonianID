@@ -18,7 +18,8 @@ function Set-ADOUEstonianIDMapping {
     Replace existing altSecurityIdentities rather than appending.
 
     .PARAMETER Force
-    Update even if a mapping already exists.
+    With -Replace, update even if the existing mappings already match.
+    Has no effect without -Replace, since only missing mappings are ever added.
 
     .PARAMETER UseCache
     Enables local caching to avoid LDAP rate limits during bulk queries.

@@ -365,8 +365,11 @@ else {
         New-Module -Name ActiveDirectory -ScriptBlock {
             function Get-ADUser {
                 param($Filter, $SearchBase, $Properties, $Identity)
-                [PSCustomObject]@{ SamAccountName = 'ok.user';   isikukood = '00000000002'; altSecurityIdentities = @() }
-                [PSCustomObject]@{ SamAccountName = 'fail.user'; isikukood = '00000000002'; altSecurityIdentities = @() }
+                $all = @(
+                    [PSCustomObject]@{ SamAccountName = 'ok.user';   isikukood = '00000000002'; altSecurityIdentities = @() }
+                    [PSCustomObject]@{ SamAccountName = 'fail.user'; isikukood = '00000000002'; altSecurityIdentities = @() }
+                )
+                if ($Identity) { $all | Where-Object { $_.SamAccountName -eq $Identity } } else { $all }
             }
             function Set-ADUser {
                 [CmdletBinding()]
@@ -388,6 +391,24 @@ else {
             throw "Expected fail.user Replaced=False with UpdateError set, got: $($failRow | Out-String)"
         }
         Write-Host " PASS: Failed Set-ADUser reported as Replaced=False with UpdateError; batch continued." -ForegroundColor Green
+
+        # Single-user cmdlet: a failed Set-ADUser must surface as an error, in both Replace and Add mode
+        foreach ($mode in @{ Replace = $true }, @{}) {
+            $modeName = if ($mode.Replace) { 'Replace' } else { 'Add' }
+            $ev = $null
+            Set-ADUserEstonianIDMapping -Identity 'fail.user' -EstonianID $adTestId -UseCache -Confirm:$false @mode `
+                -ErrorAction SilentlyContinue -ErrorVariable ev
+            if (-not @($ev | Where-Object { "$_" -match 'was NOT modified.*Insufficient access' })) {
+                throw "$modeName mode: expected a 'was NOT modified' error for fail.user, got: $($ev -join '; ')"
+            }
+            $ev = $null
+            Set-ADUserEstonianIDMapping -Identity 'ok.user' -EstonianID $adTestId -UseCache -Confirm:$false @mode `
+                -ErrorAction SilentlyContinue -ErrorVariable ev
+            if ($ev) {
+                throw "$modeName mode: expected no error for ok.user, got: $($ev -join '; ')"
+            }
+        }
+        Write-Host " PASS: Set-ADUserEstonianIDMapping reports failed Set-ADUser as an error (Replace and Add)." -ForegroundColor Green
     }
     finally {
         Remove-Module -Name ActiveDirectory -ErrorAction SilentlyContinue
