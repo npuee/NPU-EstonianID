@@ -31,8 +31,20 @@
     PrivateData = @{
         PSData = @{
             Tags = @('EstonianID', 'EstEID', 'ActiveDirectory', 'CDOC', 'DigiDoc', 'Encryption', 'Security')
-            LicenseUri = 'https://github.com/npu/NPU-EstonianID/blob/main/LICENSE'
-            ProjectUri = 'https://github.com/npu/NPU-EstonianID'
+            LicenseUri = 'https://github.com/npuee/NPU-EstonianID/blob/main/LICENSE'
+            ProjectUri = 'https://github.com/npuee/NPU-EstonianID'
+            ReleaseNotes = @'
+1.1.0 - First release. Replaces NPU-EstonianIDCard 1.2.0 (deprecated).
+- Drop-in replacement for NPU-EstonianIDCard: Get-IDUserMapping, Get-ADUserEstonianIDMapping,
+  Set-ADUserEstonianIDMapping and Set-ADOUEstonianIDMapping keep their names, parameters and output.
+- New: Protect-Cdoc (alias Protect-File) encrypts files, strings and piped text into CDOC 1.0
+  containers that open in DigiDoc4, in pure PowerShell with no external binaries.
+- New: Get-EstEIDCertificate returns ID card and Digi-ID certificates (-CardType, -Raw, -OutFolder).
+- Lookups search SK ID Solutions first and Zetes only when SK has no ID card for the person.
+- The -UseCache certificate cache moved to %LOCALAPPDATA%\NPU-EstonianID\CertCache; cached and
+  LDAP certificates are used only if valid and issued to the requested personal code.
+- Works on Windows PowerShell 5.1 and PowerShell 7+; Active Directory (RSAT) is needed only for the AD commands.
+'@
         }
     }
 }
